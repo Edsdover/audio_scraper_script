@@ -1,0 +1,37 @@
+# Core scientific stack
+numpy==1.26.4
+scipy==1.16.1
+librosa==0.10.2.post1
+numba==0.59.1
+tqdm==4.66.4
+pydub==0.25.1
+soundfile==0.12.1
+matplotlib==3.9.0
+pandas==2.2.2
+scikit-learn==1.5.0
+
+# Transformers & tokenizers (compatible pair)
+transformers==4.33.2
+tokenizers==0.13.3
+
+# WhisperX + deps
+whisperx==3.2.0
+faster-whisper==1.0.0
+onnxruntime==1.17.3
+
+# Pyannote (diarization) + core
+pyannote.audio==3.1.1
+pyannote.core==5.0.0
+pyannote.database==5.0.1
+
+# SpeechBrain (speaker verification)
+speechbrain==1.0.3
+
+# Resemblyzer (voice embeddings)
+resemblyzer @ https://github.com/resemble-ai/Resemblyzer/archive/refs/heads/master.zip
+
+# Torch stack (CUDA 11.8 builds for Windows + Py311)
+--find-links https://download.pytorch.org/whl/torch_stable.html
+torch==2.2.2+cu118
+torchvision==0.17.2+cu118
+torchaudio==2.2.2+cu118

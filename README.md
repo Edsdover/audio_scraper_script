@@ -6,10 +6,10 @@ A reproducible audio-to-dataset pipeline that transforms long-form podcast audio
 
 ## ✨ Features
 
-* **Automatic Transcription**: High-accuracy speech-to-text using **WhisperX**.
+* **Automatic Transcription**: High-accuracy speech-to-text using **[WhisperX](https://github.com/m-bain/whisperx)**.
 * **Word-Level Alignment**: Precise word and phoneme-level timestamps.
-* **Speaker Diarization**: Determines "who spoke when" using **pyannote.audio**.
-* **Target Speaker Identification**: Automatically finds the target speaker's voice using audio samples and **Resemblyzer**.
+* **Speaker Diarization**: Determines "who spoke when" using **[pyannote.audio](https://pyannote.github.io/pyannote-audio/)**.
+* **Target Speaker Identification**: Automatically finds the target speaker's voice using audio samples and **[Resemblyzer](https://github.com/resemble-ai/Resemblyzer)**.
 * **Intelligent Pair Building**: Constructs clean `(context → response)` data by filtering overlaps, handling interruptions, and merging replies.
 * **Workflow Caching**: Saves intermediate steps (transcription, alignment, etc.) for rapid iteration and debugging.
 * **FFmpeg Auto-Setup**: Downloads a local copy of FFmpeg on Windows if it's not found in the system PATH.
@@ -52,7 +52,7 @@ All primary settings are located at the top of `podcast_pipeline_gpu.py` for eas
 * `MERGE_GAP` # Defines the max silence (in seconds) between replies from the target speaker before they are merged into a single response.
 * `MIN_WORDS` # Sets the minimum word count for a target's reply to be included in the dataset.
 * `MIN_CONF` # Sets a minimum average word confidence for a reply. Can be set to `None` to disable.
-* `OVERLAP_FRAC` # Defines the maximum fraction (e.g., 0.7 for 70%) that a target's word can be overlapped by another speaker before being discarded.
+* `OVERLAP_FRAC` # (fraction) If more than this % of a word overlaps with another speaker, drop it.
 * `MAX_INPUT_WORDS` # Sets a hard limit on the number of words included in the input context to prevent excessively long prompts.
 * `ADAPTIVE_STRATEGY` # Strategy for the adaptive confidence filter ("percentile" or "median").
 
@@ -60,7 +60,7 @@ All primary settings are located at the top of `podcast_pipeline_gpu.py` for eas
 * `IDENTIFY_THRESHOLD` # How similar a voice sample must be (0.0-1.0) to a speaker in the podcast to be identified as the target. Higher is stricter.
 * `MIN_EMB_DURATION` # Ignores diarized segments shorter than this (in seconds) when creating speaker voice profiles.
 
-### Transcription (WhisperX)
+### Transcriptions **[WhisperX Docs](https://github.com/openai/whisper)**.
 * `WHISPER_MODEL` # Model size (`"large-v2"`, `"medium"`, etc.). Larger models are more accurate but require more VRAM.
 * `WHISPER_BATCH_SIZE` # Number of parallel segments to transcribe. Increase if you have a high-VRAM GPU.
 * `USE_VAD` # If `True`, runs Voice Activity Detection to segment the audio before transcription, improving accuracy on audio with long silences.
@@ -126,4 +126,3 @@ This shows the main logical flow of the script from entry point to the core func
                 * `score_pair_quality()`
             * `auto_flag_low_quality_pairs()`
             * `postfilter_clean_pairs()`
-            

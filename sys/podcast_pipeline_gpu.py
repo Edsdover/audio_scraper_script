@@ -82,7 +82,7 @@ RESULTS_FOLDER = "results"
 SYS_FOLDER = "sys"
 # Generate a timestamped log file for each run
 run_timestamp = time.strftime("%Y%m%d-%H%M%S")
-LOG_FILE = os.path.join(SYS_FOLDER, f"pipeline_{run_timestamp}.log")
+LOG_FILE = os.path.join(CACHE_FOLDER, f"pipeline_{run_timestamp}.log")
 
 # ==============================================
 # 🔧 Quality Control Configurations
@@ -1511,7 +1511,6 @@ def run_pipeline(input_audio_path):
     assign_cache = os.path.join(CACHE_FOLDER, f"{base_name}.assigned.json")
     
     # Define DYNAMIC output filenames to prevent overwriting
-    BASE_PAIRS_OUT = os.path.join(CACHE_FOLDER, f"{base_name}_base_pairs.jsonl")
     PAIRS_MERGED_OUT = os.path.join(CACHE_FOLDER, f"{base_name}_pairs_merged.jsonl")
     PAIRS_META_OUT = os.path.join(CACHE_FOLDER, f"{base_name}_pairs_with_overlap_meta.jsonl")
     PAIRS_CLEAN_OUT = os.path.join(CACHE_FOLDER, f"{base_name}_pairs_clean.jsonl")

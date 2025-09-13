@@ -1,0 +1,118 @@
+# This is a mock .gitignore file.
+# Lines starting with '#' are comments.
+# This file specifies intentionally untracked files that Git should ignore.
+
+## Custom
+ffmpeg-bin
+cache
+results
+
+## Operating System Files
+# For macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# For Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# For Linux
+.Trash-*
+*~
+
+---
+
+## IDE and Editor Files
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/
+
+# JetBrains IDEs (IntelliJ, PyCharm, WebStorm, etc.)
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Atom
+.atom/
+
+# Eclipse
+.project
+.classpath
+.settings/
+
+---
+
+## Dependency Directories
+# These directories are typically managed by package managers and should not be versioned.
+node_modules/
+bower_components/
+vendor/
+jspm_packages/
+
+---
+
+## Build and Compilation Files
+# Compiled files, logs, and temporary artifacts.
+build/
+dist/
+out/
+bin/
+*.o
+*.obj
+*.class
+*.pyc
+*.pyo
+__pycache__/
+
+---
+
+## Log and Temporary Files
+# General log, temporary, and cache files.
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pids/
+*.pid
+*.seed
+*.pid.lock
+lib-cov/
+coverage/
+
+---
+
+## Environment Variables
+# Store sensitive information like API keys here.
+# NEVER commit this file to a public repository.
+.env
+.env.local
+.env.*.local
+!.env.example
+
+---
+
+## Specific Language/Framework Files
+# Python
+.Python
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Java
+*.jar
+*.war
+*.ear
+
+# Sass
+.sass-cache/

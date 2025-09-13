@@ -23,15 +23,22 @@ A reproducible audio-to-dataset pipeline that transforms long-form podcast audio
     git clone <your-repo-url>
     cd podcast-pipeline
     ```
-2.  **Install Python**: Ensure you have **Python 3.11.x** installed.
-3.  **Place Your Files**:
-    * Put your source audio file in the root directory and name it `podcast.mp3`.
-    * Create a `samples` folder and place one or more short audio clips (.wav, .mp3) of the target speaker's voice inside (10-200 sec clips).
-4.  **Run the Pipeline**:
-    * On Windows, simply double-click `run_pipeline.bat`. It will create a virtual environment, install dependencies, and start the process.
+2.  **Place Your Files**:
+    * Place all your source audio files into the `audio_files/` folder.
+    * Place your target speaker's voice samples into the `samples/` folder.
+3.  **Run the Pipeline**:
+    * On Windows, simply double-click `run_pipeline.bat`. It will create the environment, install dependencies, and start the process.
 
-**Input**: `podcast.mp3` & `samples/` folder
-**Output**: `results.jsonl` (final dataset)
+**Input**: `audio_files/` folder & `samples/` folder
+**Output**: `results/{base_name}_results.jsonl` for each input file.
+
+### Speaker Sample Guidelines
+
+For the best speaker identification accuracy, follow these guidelines for the audio clips you place in the `samples/` folder:
+
+* **Ideal Number**: Use **3 to 5 separate sample files**. This creates a more robust and stable average "voiceprint" for the target speaker.
+* **Ideal Length**: Each sample clip should be between **10 and 30 seconds long**. This provides enough vocal data without being inefficient.
+* **Quality is Key**: The most important factor is quality. Ensure the samples are **clean recordings of only the target speaker**, with no background music, noise, or other people talking.
 
 ---
 
@@ -47,6 +54,7 @@ All primary settings are located at the top of `podcast_pipeline_gpu.py` for eas
 * `MIN_CONF` # Sets a minimum average word confidence for a reply. Can be set to `None` to disable.
 * `OVERLAP_FRAC` # Defines the maximum fraction (e.g., 0.7 for 70%) that a target's word can be overlapped by another speaker before being discarded.
 * `MAX_INPUT_WORDS` # Sets a hard limit on the number of words included in the input context to prevent excessively long prompts.
+* `ADAPTIVE_STRATEGY` # Strategy for the adaptive confidence filter ("percentile" or "median").
 
 ### Speaker Identification
 * `IDENTIFY_THRESHOLD` # How similar a voice sample must be (0.0-1.0) to a speaker in the podcast to be identified as the target. Higher is stricter.
@@ -65,26 +73,16 @@ All primary settings are located at the top of `podcast_pipeline_gpu.py` for eas
 
 ---
 
-## 📂 Files & Artifacts
+## 🏗️ Project Structure
 
-The pipeline generates several files. Caching allows you to re-run the process without repeating heavy steps. **To re-run a specific stage, just delete its corresponding `.json` file.**
+This project uses a clean folder structure to separate inputs, outputs, and system files.
 
-### Cache Files
-* `podcast.transcript.json`: Raw transcription output from WhisperX.
-* `podcast.aligned.json`: Transcript with word-level timestamps.
-* `podcast.diarization.json`: Speaker diarization timeline.
-* `podcast.assigned.json`: Transcript with a speaker assigned to each word.
-
-### Output Files
-* **`results.jsonl`**: The final, cleaned dataset of `(input, output)` pairs.
-* `pairs_flagged.jsonl`: A list of low-quality pairs flagged for manual review.
-* `pair_quality_metrics.csv`: A CSV file with quality scores for every generated pair.
-* `base_pairs.jsonl`: Raw pairs generated before merging and advanced filtering.
-
-### Debug Outputs (if `KEEP_DEBUG_OUTPUTS` is `True`)
-* `pairs_merged.jsonl`: Pairs after the reply merging step.
-* `pairs_with_overlap_meta.jsonl`: Pairs with detailed, per-word overlap data.
-* `pairs_clean.jsonl`: Pairs after overlapped words have been removed from responses.
+* **`audio_files/`**: Place your source audio files (e.g., `.mp3`, `.wav`) here.
+* **`samples/`**: Place short, clean audio clips of your target speaker's voice here.
+* **`results/`**: Contains the final, cleaned `.jsonl` training data after a successful run.
+* **`cache/`**: Contains all intermediate files: `.wav` conversions, `.json` caches, debug logs, and quality reports. This folder can be safely deleted to force a clean run.
+* **`sys/`**: Contains the core system files: the Python script, virtual environment (`venv`), and FFMPEG. You should not need to modify this folder.
+* **`run_pipeline.bat`**: The main script to execute the entire pipeline.
 
 ---
 
@@ -92,16 +90,19 @@ The pipeline generates several files. Caching allows you to re-run the process w
 
 ### Critical Data Filtering Flow
 
-The core of the pair-building logic follows this multi-stage filtering process to ensure high data quality:
+The core of the pair-building logic follows this multi-stage filtering process. It's tuned to preserve the target speaker's unique conversational style for the parody chatbot goal.
 
 1.  **Adaptive Confidence Filter**: Removes low-confidence words based on per-speaker statistical thresholds, which is more robust than a single global cutoff.
+
 2.  **Neural VAD Filter**: Identifies all segments of active speech. Any transcribed words falling outside these segments (often hallucinations in silent parts) are discarded.
-3.  **Short Word Reassignment**: Corrects common diarization errors where short interjections (e.g., "yes," "ok") from the target speaker are misattributed to the host.
-4.  **Regrouping**: The filtered, word-level data is reassembled into contiguous speaker segments.
-5.  **Pair Construction**: The pipeline iterates through segments, assigning non-target speech as "input" and target speech as "output."
-6.  **Reply Merging**: Consecutive replies from the target speaker are stitched together to form longer, more coherent outputs.
-7.  **Overlap Removal**: A detailed, per-word analysis removes any part of the target's speech that overlaps with other speakers, cleaning up cross-talk.
-8.  **Final Filtering**: The cleaned pairs are passed through final checks for minimum length and confidence.
+
+3.  **Short Word Reassignment**: Corrects common diarization errors where short interjections (e.g., "yes," "ok") from the target speaker are misattributed to another speaker.
+
+4.  **Pair Construction & Reply Merging**: The pipeline constructs `(context -> response)` pairs and then stitches together consecutive replies from the target speaker to form longer, more coherent outputs.
+
+5.  **Overlap Tagging (Instead of Dropping)**: To preserve the natural dynamics of conversation and interruption, words spoken during cross-talk are **not deleted**. Instead, they are wrapped in special tags (e.g., `"I <overlap>really</overlap> think so"`). This teaches the LLM the context of interruptions, a key part of a speaker's personality.
+
+6.  **Final Filtering (with Nuance)**: The cleaned pairs are passed through final checks. This step is designed to **preserve punchy, high-confidence short replies** (like "Exactly!") which are often discarded by simpler filters but are crucial for capturing a speaker's character.
 
 ### Function Call Hierarchy
 
@@ -110,11 +111,11 @@ This shows the main logical flow of the script from entry point to the core func
 * `main()`
     * `run_pipeline()`
         * `transcribe_with_vad()`
-        * `attach_speakers_to_transcript()`
-            * `safe_assign_word_speakers()`
+        * `safe_assign_word_speakers()`
+            * `attach_speakers_to_transcript()`
+        * `compute_speaker_embeddings()`
         * `identify_speaker()`
-            * `identify_best_speaker()`
-                * `load_reference_embeddings()`
+            * `load_reference_embeddings()`
         * **Pair Building & Filtering (Step 5)**
             * `adaptive_conf_filter()`
             * `run_vad_with_fallback()`
@@ -123,5 +124,6 @@ This shows the main logical flow of the script from entry point to the core func
             * `merge_close_replies()`
             * `compute_overlap_and_write()`
                 * `score_pair_quality()`
-            * `postfilter_clean_pairs()`
             * `auto_flag_low_quality_pairs()`
+            * `postfilter_clean_pairs()`
+            

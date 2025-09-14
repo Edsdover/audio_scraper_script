@@ -19,10 +19,8 @@ A reproducible audio-to-dataset pipeline that transforms long-form podcast audio
 ## 🚀 Quickstart
 
 1.  **Clone the Repo**:
-    ```bash
-    git clone <your-repo-url>
-    cd podcast-pipeline
-    ```
+2.  **Install python**:
+    * Install **Python 3.11** (required).
 2.  **Place Your Files**:
     * Place all your source audio files into the `audio_files/` folder.
     * Place your target speaker's voice samples into the `samples/` folder.
@@ -32,6 +30,7 @@ A reproducible audio-to-dataset pipeline that transforms long-form podcast audio
 **Input**: `audio_files/` folder & `samples/` folder
 **Output**: `results/{base_name}_results.jsonl` for each input file.
 
+
 ### Speaker Sample Guidelines
 
 For the best speaker identification accuracy, follow these guidelines for the audio clips you place in the `samples/` folder:
@@ -40,6 +39,12 @@ For the best speaker identification accuracy, follow these guidelines for the au
 * **Ideal Length**: Each sample clip should be between **10 and 30 seconds long**. This provides enough vocal data without being inefficient.
 * **Quality is Key**: The most important factor is quality. Ensure the samples are **clean recordings of only the target speaker**, with no background music, noise, or other people talking.
 
+
+## 🔑 Environment
+
+* Python **3.11+**
+* Torch (CUDA build for GPU acceleration)
+* Hugging Face token (`HF_TOKEN`) for WhisperX/pyannote
 ---
 
 ## ⚙️ Configuration Knobs

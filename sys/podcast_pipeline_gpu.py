@@ -10,6 +10,8 @@ import tempfile
 import re
 import csv
 
+from tqdm import tqdm
+
 import numpy as np
 import requests
 import statistics
@@ -888,6 +890,91 @@ def build_pairs(segments, target_label, non_target_filter=None):
 
     return pairs, dropped_non_target
 
+def build_qna_pairs(assigned_data, target_speaker):
+    """
+    Builds training pairs from a single-speaker recording by identifying
+    question-and-answer patterns in the monologue.
+    """
+    logging.info("[PAIRS-QNA] Building pairs for single-speaker Q&A scenario.")
+    
+    words = []
+    for seg in assigned_data.get("segments", []):
+        words.extend(w for w in seg.get("words", []) if isinstance(w, dict))
+
+    if not words:
+        return []
+
+    # Reconstruct sentences from words based on punctuation
+    sentences = []
+    current_sentence_words = []
+    for word in words:
+        word_text = (word.get("word") or word.get("text") or "").strip()
+        current_sentence_words.append(word)
+        if word_text.endswith(('.', '?', '!')):
+            sentences.append(current_sentence_words)
+            current_sentence_words = []
+    if current_sentence_words:
+        sentences.append(current_sentence_words)
+
+    # Identify questions and build pairs (Question -> Subsequent non-questions)
+    qna_pairs = []
+    current_question_words = []
+    current_answer_words = []
+    in_answer = False
+
+    interrogative_words = {"what", "who", "when", "where", "why", "how", "is", "are", "do", "does", "did", "can", "could", "will", "would", "should"}
+
+    for sentence_words in sentences:
+        sentence_text = " ".join((w.get("word") or w.get("text") or "") for w in sentence_words).strip()
+        first_word = sentence_text.split(' ', 1)[0].lower().strip(".,?!")
+        
+        is_question = sentence_text.endswith('?') or first_word in interrogative_words
+
+        if is_question:
+            # If we were in an answer, the previous pair is complete
+            if in_answer and current_question_words and current_answer_words:
+                qna_pairs.append((current_question_words, current_answer_words))
+            
+            # Start a new question
+            current_question_words = sentence_words
+            current_answer_words = []
+            in_answer = True # We are now looking for an answer
+        elif in_answer:
+            # If we are in an answer, append the current sentence
+            current_answer_words.extend(sentence_words)
+
+    # Add the last collected pair if it exists
+    if current_question_words and current_answer_words:
+        qna_pairs.append((current_question_words, current_answer_words))
+
+    # Format into the standard pair structure
+    final_pairs = []
+    for i, (q_words, a_words) in enumerate(qna_pairs):
+        input_text = " ".join((w.get("word") or w.get("text") or "") for w in q_words).strip()
+        output_text = " ".join((w.get("word") or w.get("text") or "") for w in a_words).strip()
+        
+        scores = [w.get("score") for w in a_words if isinstance(w.get("score"), (int, float))]
+        avg_score = statistics.mean(scores) if scores else None
+        
+        tstart = a_words[0].get("start") if a_words else None
+        tend = a_words[-1].get("end") if a_words else None
+
+        final_pairs.append({
+            "seg_idx": f"qna-{i}",
+            "input": input_text,
+            "input_len": len(input_text.split()),
+            "output": output_text,
+            "output_len": len(output_text.split()),
+            "output_speaker": target_speaker,
+            "avg_score": avg_score,
+            "tstart": tstart,
+            "tend": tend,
+            "words": a_words,
+        })
+        
+    logging.info(f"[PAIRS-QNA] Built {len(final_pairs)} Q&A pairs.")
+    return final_pairs
+
 def build_pairs_detailed(assigned_data, target_speaker):
     """
     Like build_pairs but returns detailed pairs:
@@ -895,6 +982,7 @@ def build_pairs_detailed(assigned_data, target_speaker):
     """
     pairs = []
     context_buffer = []
+    is_first_pair = True # Track if we are creating the first pair of the session
 
     for seg_idx, segment in enumerate(assigned_data.get("segments", [])):
         normalized = []
@@ -947,7 +1035,7 @@ def build_pairs_detailed(assigned_data, target_speaker):
                     context_len = len(context_words)
                     logging.debug(f"[PAIRS-D] Truncated detailed context for seg_idx={seg_idx} to {context_len} words (MAX_INPUT_WORDS={max_in})")
 
-                pairs.append({
+                pair_data = {
                     "seg_idx": seg_idx,
                     "input": context_text,
                     "input_len": context_len,
@@ -958,7 +1046,15 @@ def build_pairs_detailed(assigned_data, target_speaker):
                     "tstart": tstart,
                     "tend": tend,
                     "words": reply_words
-                })
+                }
+
+                # If this is the first pair and it has no preceding context, flag it as the introduction.
+                if is_first_pair and context_len == 0:
+                    pair_data["is_first_utterance"] = True
+                
+                pairs.append(pair_data)
+                is_first_pair = False # Unset flag after processing the first potential pair
+
             # reset context
             context_buffer = []
         else:
@@ -1531,7 +1627,6 @@ def run_pipeline(input_audio_path):
     # Ensure we have a WAV copy for VAD and libraries needing PCM
     if not os.path.exists(wav_path):
         try:
-            from pydub import AudioSegment
             audio = AudioSegment.from_file(input_audio_path)
             audio.set_channels(1).set_frame_rate(16000).export(wav_path, format="wav")
             logging.info(f"[AUDIO] Exported WAV copy for VAD: {wav_path}")
@@ -1673,7 +1768,48 @@ def run_pipeline(input_audio_path):
         assigned_data = json.load(f)
     assigned_segments = assigned_data.get("segments", [])
 
-    # --- Normalize words across all segments ---
+    # --- Speaker Dominance Check for Single-Speaker Scenario ---
+    speaker_word_counts = defaultdict(int)
+    total_word_count = 0
+    for seg in assigned_data.get("segments", []):
+        for w in seg.get("words", []):
+            speaker = w.get("speaker")
+            if speaker:
+                speaker_word_counts[speaker] += 1
+                total_word_count += 1
+
+    is_single_speaker_scenario = False
+    if best_speaker and total_word_count > 0:
+        target_speaker_words = speaker_word_counts.get(best_speaker, 0)
+        # If only one speaker was diarized OR the target speaks > 98% of the words
+        if len(speaker_word_counts) == 1 or (target_speaker_words / total_word_count) > 0.98:
+            is_single_speaker_scenario = True
+            logging.info(f"[PIPELINE] Single-speaker Q&A scenario detected for {base_name}.")
+
+    # --- Scenario-based Pair Building ---
+    if is_single_speaker_scenario:
+        # For Q&A, we build pairs and then run a simplified finalization sequence
+        qna_pairs = build_qna_pairs(assigned_data, best_speaker) 
+        
+        final_pairs, _ = postfilter_clean_pairs(
+            qna_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF
+        )
+
+        for p in final_pairs:
+            score, metrics = score_pair_quality(p)
+            p["quality_score"] = score
+            p["quality_metrics"] = metrics
+        
+        logging.info(f"[PIPELINE] Final output for {base_name} written to '{FINAL_OUTPUT}' ({len(final_pairs)} kept).")
+        with open(FINAL_OUTPUT, "w", encoding="utf-8") as f:
+            for p in final_pairs:
+                # Q&A pairs should not have empty inputs, but handle defensively
+                if not p.get("input", "").strip():
+                    p["input"] = "[MISSING QUESTION]"
+                f.write(json.dumps(p, ensure_ascii=False) + "\n")
+        return # End processing for this file
+
+    # --- Normalize words across all segments (Standard Multi-Speaker Path) ---
     flat_words = []
     for seg in assigned_segments:
         for w in seg.get("words", []):
@@ -1738,8 +1874,8 @@ def run_pipeline(input_audio_path):
     with open(PAIRS_MERGED_OUT, "w", encoding="utf-8") as f:
         for p in pairs_merged:
             f.write(json.dumps({
-                "input": p.get("input",""),
-                "output": p.get("output",""),
+                "input": p.get("input", ""),
+                "output": p.get("output", ""),
                 "output_speaker": p.get("output_speaker")
             }, ensure_ascii=False) + "\n")
 
@@ -1817,7 +1953,10 @@ def run_pipeline(input_audio_path):
 
     for p in final_pairs:
         if _is_empty_input(p):
-            p["input"] = "[CONTEXT CONTINUES]"
+            if p.get("is_first_utterance"):
+                p["input"] = "[NO PROMPT]"
+            else:
+                p["input"] = "[CONTEXT CONTINUES]"
 
     final_output_path = FINAL_OUTPUT
     with open(final_output_path, "w", encoding="utf-8") as f:
@@ -1835,6 +1974,29 @@ def run_pipeline(input_audio_path):
 
     logging.info(f"[PIPELINE] Replaced {original_empty_input_count} empty inputs with [CONTEXT CONTINUES].")
     logging.info(f"[PIPELINE] Final output for {base_name} written to '{os.path.join(RESULTS_FOLDER, base_name)}_results.jsonl' ({len(final_pairs)} kept).")
+
+    # ==========================
+    # FINAL PIPELINE SUMMARY
+    # ==========================
+    logging.info("========================================")
+    logging.info(f"📊 FINAL DATASET SUMMARY FOR: {base_name}")
+    logging.info("========================================")
+    logging.info(f"🎙️  Target identified as       : {best_speaker} (score = {best_score:.4f})")
+    logging.info(f"📝  Words attributed to Target : {target_word_count}")
+    logging.info(f"💬  Raw pairs (pre-merge)      : {len(pairs_detailed)}")
+    logging.info(f"🔗  After merging (gap={MERGE_GAP}s)   : {len(pairs_merged)}")
+    logging.info(f"🚫  Overlaps tagged            : {overlap_summary.get('overlapped_words', 0)} words "
+                 f"({overlap_summary.get('overlap_rate', 0.0):.1%})")
+    logging.info(f"🧹  Clean pairs before filter  : {overlap_summary.get('pairs_clean_count', 0)}")
+    logging.info(f"⚖️  Filtering rules            : min_words={MIN_WORDS}, min_conf={MIN_CONF}")
+    logging.info(f"✅  Final usable pairs         : {len(final_pairs)}")
+    logging.info(f"📭  Pairs with empty input     : {original_empty_input_count} ({original_empty_input_pct:.1f}%) → replaced")
+    logging.info(f"❌  Dropped by length          : {post_summary['counts']['dropped_by_length']}")
+    logging.info(f"❌  Dropped by confidence      : {post_summary['counts']['dropped_by_conf']}")
+    logging.info(f"❌  Dropped by semantics       : {post_summary['counts']['dropped_by_semantic']}")
+    logging.info(f"❌  Noise filter               : {dropped_non_target} words dropped by non-target word filter")
+    logging.info(f"🚩  Flagged for review         : {flagged_count} pairs in {os.path.basename(PAIRS_FLAGGED_OUT)}")
+    logging.info("========================================")
 
     if not KEEP_DEBUG_OUTPUTS:
         debug_files_to_remove = [

@@ -9,7 +9,7 @@ import zipfile
 import tempfile
 import re
 import csv
-
+import warnings
 from tqdm import tqdm
 
 import numpy as np
@@ -19,7 +19,6 @@ import torch
 import whisperx
 import nltk
 
-from tqdm import tqdm
 from pyannote.audio import Pipeline
 from numpy.linalg import norm
 from numpy import dot
@@ -30,11 +29,12 @@ from scipy.spatial.distance import cosine
 from nltk.corpus import stopwords
 from collections import defaultdict
 
-# ============================================================
+# ============================================================ 
 # 🎙️ Pipeline Configuration
 # All the knobs you might want to tweak live here.
 # Adjust these values to control how the pipeline behaves.
-# ============================================================
+# ============================================================ 
+os.environ['PYTHONIOENCODING'] = 'utf-8'
 KEEP_DEBUG_OUTPUTS = True # True = keep merged/clean/overlap files, False = only save final cleaned_data.jsonl
 LANGUAGE = "en"
 # WhisperX Supports the following for transcription: Afrikaans, Albanian, Amharic, Arabic, Armenian, Assamese, Azerbaijani, Bashkir, Basque, Belarusian, Bengali, Bosnian, Breton, Bulgarian, Burmese, Castilian, Catalan, Chinese, Croatian, Czech, Danish, Dutch, English, Estonian, Faroese, Finnish, Flemish, French, Galician, Georgian, German, Greek, Gujarati, Haitian Creole, Hausa, Hawaiian, Hebrew, Hindi, Hungarian, Icelandic, Indonesian, Italian, Japanese, Javanese, Kannada, Kazakh, Khmer, Korean, Lao, Latin, Latvian, Letzeburgesch, Lithuanian, Luxembourgish, Macedonian, Malagasy, Malay, Malayalam, Maltese, Maori, Marathi, Moldavian, Moldovan, Mongolian, Nepali, Norwegian, Nynorsk, Occitan, Pashto, Persian, Polish, Portuguese, Punjabi, Pushto, Romanian, Russian, Sanskrit, Serbian, Shona, Sindhi, Sinhala, Slovak, Slovenian, Somali, Spanish, Sundanese, Swahili, Swedish, Tagalog, Tajik, Tamil, Tatar, Telugu, Thai, Tibetan, Turkish, Turkmen, Ukrainian, Urdu, Uzbek, Valencian, Vietnamese, Welsh, Yiddish, Yoruba.
@@ -86,9 +86,9 @@ SYS_FOLDER = "sys"
 run_timestamp = time.strftime("%Y%m%d-%H%M%S")
 LOG_FILE = os.path.join(CACHE_FOLDER, f"pipeline_{run_timestamp}.log")
 
-# ==============================================
+# ============================================== 
 # 🔧 Quality Control Configurations
-# ==============================================
+# ============================================== 
 
 # Choose which profile to use: "balanced" or "conservative"
 QUALITY_PROFILE = "balanced"
@@ -115,7 +115,7 @@ PROFILES = {
 }
 
 CFG = PROFILES[QUALITY_PROFILE]
-ADAPTIVE_STRATEGY = "percentile" # Strategy for adaptive confidence filter: "percentile" or "median"
+ADAPTIVE_STRATEGY = "percentile" # Strategy for adaptive confidence filter: "percentile" or "median" 
 
 NON_TARGET_FILTER = {
     # Acknowledgements / backchannels
@@ -163,9 +163,9 @@ NON_TARGET_FILTER = {
     "huh",
 }
 
-# -------------------------
+# ------------------------- 
 # Script Setup
-# -------------------------
+# ------------------------- 
 try:
     nltk.download('stopwords', quiet=True)
     STOPWORDS = set(stopwords.words("english"))
@@ -174,7 +174,7 @@ except Exception as e:
     STOPWORDS = set()
 HF_TOKEN = os.getenv("HF_TOKEN") # safer than hardcoding, user must set env var
 if HF_TOKEN is None:
-    HF_TOKEN = "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"
+    HF_TOKEN = "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"
     logging.warning("[SETUP] No HuggingFace token found in environment variable HF_TOKEN.")
 
 step_timings = {} # collect per-step durations
@@ -186,9 +186,9 @@ os.makedirs(ffmpeg_dir, exist_ok=True)
 ffmpeg_exe = os.path.join(ffmpeg_dir, "ffmpeg.exe")
 ffprobe_exe = os.path.join(ffmpeg_dir, "ffprobe.exe")
 
-# ------------------------------
+# ------------------------------ 
 # FFMPEG bootstrap (download if missing)
-# ------------------------------
+# ------------------------------ 
 if not os.path.exists(ffmpeg_exe) or not os.path.exists(ffprobe_exe):
     print("[FFMPEG] ffmpeg/ffprobe not found, downloading...")
     url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
@@ -210,30 +210,65 @@ os.environ["PATH"] += os.pathsep + ffmpeg_dir
 AudioSegment.converter = ffmpeg_exe
 AudioSegment.ffprobe = ffprobe_exe
 
-print(f"[FFMPEG] Using ffmpeg: {ffmpeg_exe}")
-print(f"[FFMPEG] Using ffprobe: {ffprobe_exe}")
+# ------------------------------------------------- 
+# TQDM-Aware Logging & Full Output Capture
+# ------------------------------------------------- 
+class TqdmLoggingHandler(logging.Handler):
+    """Redirects logging messages to tqdm.write() to avoid progress bar corruption."""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg, file=sys.stdout)
+            self.flush()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            self.handleError(record)
 
-# ------------------------------
-# Logging setup: console + file
-# ------------------------------
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)
+def configure_loggers():
+    """Set up the root logger and configure library loggers."""
+    log = logging.getLogger()
+    log.setLevel(logging.DEBUG)
+    
+    # Remove any existing handlers
+    for handler in log.handlers[:]:
+        log.removeHandler(handler)
 
-file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
-file_handler.setLevel(logging.DEBUG)
+    # Create handlers
+    file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    file_handler.setFormatter(formatter)
 
-formatter = logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-)
-console_handler.setFormatter(formatter)
-file_handler.setFormatter(formatter)
+    tqdm_handler = TqdmLoggingHandler()
+    tqdm_handler.setLevel(logging.INFO)
+    tqdm_handler.setFormatter(formatter)
 
-logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler])
-logging.info("=== Pipeline started ===")
+    # Add handlers to the root logger
+    log.addHandler(file_handler)
+    log.addHandler(tqdm_handler)
 
-# -------------------------
+    # Configure library loggers to use the same handlers
+    # This prevents them from creating their own handlers and writing directly to console
+    libraries_to_configure = ["pyannote", "whisperx", "speechbrain", "numba"]
+    for lib_name in libraries_to_configure:
+        lib_logger = logging.getLogger(lib_name)
+        lib_logger.setLevel(logging.DEBUG)
+        lib_logger.propagate = True # Propagate to root logger
+        for handler in lib_logger.handlers[:]:
+            lib_logger.removeHandler(handler)
+
+configure_loggers()
+log = logging.getLogger(__name__)
+
+log.info("=== Pipeline started ===")
+log.info(f"[FFMPEG] Using ffmpeg: {ffmpeg_exe}")
+log.info(f"[FFMPEG] Using ffprobe: {ffprobe_exe}")
+
+
+# ------------------------- 
 # Function Definitions
-# -------------------------
+# ------------------------- 
 def mark_step(step_name, start_time):
     """Record elapsed time for a pipeline step."""
     elapsed = time.time() - start_time
@@ -317,7 +352,7 @@ def compute_speaker_embeddings(audio_file, diarization, min_duration=MIN_EMB_DUR
     try:
         audio = AudioSegment.from_file(audio_file)
     except Exception as e:
-        logging.error(f"[EMBED] Cannot load audio file {audio_file}: {e}")
+        log.error(f"[EMBED] Cannot load audio file {audio_file}: {e}")
         return {}
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -340,7 +375,7 @@ def compute_speaker_embeddings(audio_file, diarization, min_duration=MIN_EMB_DUR
                     if emb is not None:
                         speaker_embeddings.setdefault(label, []).append(emb)
                 except Exception as e:
-                    logging.debug(f"[EMBED] Failed embedding segment {label} {seg}: {e}")
+                    log.debug(f"[EMBED] Failed embedding segment {label} {seg}: {e}")
                 i += 1
         else:
             # fallback if diarization is a list/dict of segments
@@ -362,7 +397,7 @@ def compute_speaker_embeddings(audio_file, diarization, min_duration=MIN_EMB_DUR
                     if emb is not None:
                         speaker_embeddings.setdefault(label, []).append(emb)
                 except Exception as e:
-                    logging.debug(f"[EMBED] Failed embedding segment {label} {start}->{end}: {e}")
+                    log.debug(f"[EMBED] Failed embedding segment {label} {start}->{end}: {e}")
 
     # Average + normalize per speaker
     averaged_embeddings = {}
@@ -373,9 +408,9 @@ def compute_speaker_embeddings(audio_file, diarization, min_duration=MIN_EMB_DUR
         avg = np.mean(embs, axis=0)
         avg /= np.linalg.norm(avg)
         averaged_embeddings[spk] = avg
-        logging.info(f"[EMBED] Speaker {spk}: {len(embs)} segments used.")
+        log.info(f"[EMBED] Speaker {spk}: {len(embs)} segments used.")
 
-    logging.info(f"[EMBED] Computed embeddings for {len(averaged_embeddings)} speakers.")
+    log.info(f"[EMBED] Computed embeddings for {len(averaged_embeddings)} speakers.")
     return averaged_embeddings
 
 def overlaps_vad(word, vad_segments):
@@ -421,7 +456,7 @@ def _embed_audio_segment(wav_path, encoder):
         emb = encoder.embed_utterance(wav)
         return emb
     except Exception as e:
-        logging.debug(f"[IDENTIFY] Embedding failed for {wav_path}: {e}")
+        log.debug(f"[IDENTIFY] Embedding failed for {wav_path}: {e}")
         return None
     
 def load_reference_embeddings(samples_folder):
@@ -445,7 +480,7 @@ def load_reference_embeddings(samples_folder):
             if emb is not None:
                 ref_embs.append(emb)
         except Exception as e:
-            logging.warning(f"[IDENTIFY] Skipping sample {fpath}: {e}")
+            log.warning(f"[IDENTIFY] Skipping sample {fpath}: {e}")
     if not ref_embs:
         raise ValueError("No valid reference embeddings found in samples folder.")
     # average to single target embedding
@@ -454,56 +489,56 @@ def load_reference_embeddings(samples_folder):
 
 def print_final_batch_summary(setup_time, per_file_times, total_time):
     """Prints a final, comprehensive summary for the entire batch run."""
-    print("\n" + "="*50)
-    print("📊 BATCH PROCESSING SUMMARY")
-    print("="*50)
+    log.info("\n" + "="*50)
+    log.info("📊 BATCH PROCESSING SUMMARY")
+    log.info("="*50)
 
     # Format and print setup time
     s_mins, s_secs = divmod(int(setup_time), 60)
-    print(f"⚙️  Script Setup Time : {s_mins}m {s_secs}s")
-    print("-"*50)
+    log.info(f"⚙️  Script Setup Time : {s_mins}m {s_secs}s")
+    log.info("-"*50)
 
     # Format and print per-file times
-    print("📄 Per-File Processing Times:")
+    log.info("📄 Per-File Processing Times:")
     if not per_file_times:
-        print("  No files were processed.")
+        log.info("  No files were processed.")
     else:
         for filename, duration in per_file_times.items():
             if duration == -1:
-                print(f"  - {filename}: FAILED")
+                log.info(f"  - {filename}: FAILED")
             else:
                 f_mins, f_secs = divmod(int(duration), 60)
-                print(f"  - {filename}: {f_mins}m {f_secs}s")
-    print("-"*50)
+                log.info(f"  - {filename}: {f_mins}m {f_secs}s")
+    log.info("-"*50)
     
     # Format and print total time
     t_mins, t_secs = divmod(int(total_time), 60)
-    print(f"⏱️  Total Run Time    : {t_mins}m {t_secs}s")
-    print("="*50 + "\n")
+    log.info(f"⏱️  Total Run Time    : {t_mins}m {t_secs}s")
+    log.info("="*50 + "\n")
 
-def safe_assign_word_speakers(diarize_segments, result, diar_cache_path):
+def safe_assign_word_speakers(diarize_segments, result, diar_cache_path, base_name):
     """
     Try to assign speakers using WhisperX's built-in method.
     If it fails (due to serialization, version, or overlap issues),
     fall back to a manual attachment method.
     """
     try:
-        logging.info("[ASSIGN] Attempting whisperx.assign_word_speakers...")
+        log.info("[ASSIGN] Attempting whisperx.assign_word_speakers...")
         assigned = whisperx.assign_word_speakers(diarize_segments, result)
-        logging.info("[ASSIGN] Successfully assigned speakers with whisperx.")
+        log.info("[ASSIGN] Successfully assigned speakers with whisperx.")
         return assigned
     except Exception as e:
-        logging.warning(f"[ASSIGN] whisperx.assign_word_speakers failed: {e}")
-        logging.info("[ASSIGN] Falling back to custom attach_speakers_to_transcript...")
+        log.warning(f"[ASSIGN] whisperx.assign_word_speakers failed: {e}")
+        log.info("[ASSIGN] Falling back to custom attach_speakers_to_transcript...")
         try:
-            assigned = attach_speakers_to_transcript(diarize_segments, result, diarization_json_path=diar_cache_path)
-            logging.info("[ASSIGN] Successfully assigned speakers with fallback method.")
+            assigned = attach_speakers_to_transcript(diarize_segments, result, diarization_json_path=diar_cache_path, base_name=base_name)
+            log.info("[ASSIGN] Successfully assigned speakers with fallback method.")
             return assigned
         except Exception as inner_e:
-            logging.error(f"[ASSIGN] Fallback attach_speakers_to_transcript also failed: {inner_e}")
+            log.error(f"[ASSIGN] Fallback attach_speakers_to_transcript also failed: {inner_e}")
             raise
     
-def attach_speakers_to_transcript(diarization, aligned_result, diarization_json_path="podcast.diarization.json"):
+def attach_speakers_to_transcript(diarization, aligned_result, diarization_json_path, base_name):
     """
     Robustly attach speaker labels to each word in an aligned transcript.
     - If 'diarization' has itertracks(), prefer that (pyannote Annotation).
@@ -511,7 +546,7 @@ def attach_speakers_to_transcript(diarization, aligned_result, diarization_json_
     Returns aligned_result with word['speaker'] set.
     """
     import json
-    logging.info("[ATTACH] Attaching speakers to aligned transcript...")
+    log.info("[ATTACH] Attaching speakers to aligned transcript...")
 
     # Helper: attach using pyannote Annotation if present
     if hasattr(diarization, "itertracks"):
@@ -524,7 +559,7 @@ def attach_speakers_to_transcript(diarization, aligned_result, diarization_json_
             else:
                 continue
             diar_segments.append((float(seg.start), float(seg.end), label))
-        logging.info(f"[ATTACH] Using pyannote Annotation → {len(diar_segments)} segments")
+        log.info(f"[ATTACH] Using pyannote Annotation -> {len(diar_segments)} segments")
     else:
         # Fallback: load diarization JSON saved by pipeline
         try:
@@ -542,9 +577,9 @@ def attach_speakers_to_transcript(diarization, aligned_result, diarization_json_
                         continue
                     diar_segments.append((float(start), float(end), label))
             diar_segments.sort(key=lambda x: x[0])
-            logging.info(f"[ATTACH] Loaded {len(diar_segments)} diarization segments from JSON")
+            log.info(f"[ATTACH] Loaded {len(diar_segments)} diarization segments from JSON")
         except Exception as e:
-            logging.error(f"[ATTACH] Failed to load diarization JSON: {e}")
+            log.error(f"[ATTACH] Failed to load diarization JSON: {e}")
             diar_segments = []
 
     # Attach speaker label to each word by picking diarization label with max overlap
@@ -573,13 +608,14 @@ def attach_speakers_to_transcript(diarization, aligned_result, diarization_json_
     for seg in aligned_result.get("segments", []):
         for w in seg.get("words", []):
             counts[w.get("speaker", "unknown")] = counts.get(w.get("speaker","unknown"), 0) + 1
-    logging.info(f"[ATTACH] Attached {attached}/{total_words} words. Per-speaker sample: {dict(list(counts.items())[:10])}")
+    log.info(f"[ATTACH] Attached {attached}/{total_words} words. Per-speaker sample: {dict(list(counts.items())[:10])}")
 
     # Optionally write a debug copy of the attached alignment
     try:
-        with open("podcast.aligned.attached.json", "w", encoding="utf-8") as f:
+        debug_path = os.path.join(CACHE_FOLDER, f"{base_name}.aligned.attached.json")
+        with open(debug_path, "w", encoding="utf-8") as f:
             json.dump(aligned_result, f, ensure_ascii=False, indent=2)
-        logging.info("[ATTACH] Wrote podcast.aligned.attached.json for inspection.")
+        log.info(f"[ATTACH] Wrote {os.path.basename(debug_path)} for inspection.")
     except Exception:
         pass
 
@@ -656,11 +692,11 @@ def run_vad_with_fallback(wav_path, vad_mult=CFG["VAD_MULT"], hf_token_env="HF_H
         vad_segments = []
         for speech in diar.get_timeline().support():
             vad_segments.append((speech.start, speech.end))
-        logging.info(f"[VAD-NEURAL] pyannote returned {len(vad_segments)} segments")
+        log.info(f"[VAD-NEURAL] pyannote returned {len(vad_segments)} segments")
         if vad_segments:
             return vad_segments
     except Exception as e:
-        logging.info(f"[VAD-NEURAL] neural VAD failed/absent, falling back: {e}")
+        log.info(f"[VAD-NEURAL] neural VAD failed/absent, falling back: {e}")
 
     # fallback: energy-based
     return run_energy_vad(wav_path, vad_mult=vad_mult)
@@ -703,7 +739,7 @@ def merge_close_replies(pairs, gap_threshold=MERGE_GAP):
             cur = p
 
     merged.append(cur)
-    logging.info(
+    log.info(
         f"[PAIRS-MERGE] Merged {len(pairs)} -> {len(merged)} pairs with gap_threshold={gap_threshold:.1f}s"
     )
     return merged
@@ -734,7 +770,7 @@ def make_pair(input_words, output_words, seg_idx=None, run_idx=None, target_labe
         input_words_list = input_words_list[-max_in:]
         input_text = " ".join(input_words_list)
         input_len = len(input_words_list)
-        logging.debug(f"[PAIR] Truncated input for seg_idx={seg_idx} to {input_len} words (MAX_INPUT_WORDS={max_in})")
+        log.debug(f"[PAIR] Truncated input for seg_idx={seg_idx} to {input_len} words (MAX_INPUT_WORDS={max_in})")
 
     # tstart/tend from output words
     tstart = output_words[0].get("start") if output_words else None
@@ -772,7 +808,7 @@ def reassign_short_target_words(words, target_label, window=REASSIGN_WINDOW, aud
             continue
 
         word_text = (w.get("word") or w.get("text") or "").strip().lower()
-        if len(word_text) <= 3:  # e.g. "yes", "no", "ok"
+        if len(word_text) <= 3:  # e.g. "yes", "no", "ok" 
             start = w.get("start", 0.0) or 0.0
             # Collect neighbors in window
             neighbors = [u for u in words if abs((u.get("start") or 0.0) - start) <= window]
@@ -885,8 +921,8 @@ def build_pairs(segments, target_label, non_target_filter=None):
                                seg_idx=f"{seg_idx}-{run_idx}",
                                target_label=target_label))
 
-    logging.info(f"[FILTER] Dropped {dropped_non_target} non-target filler words using NON_TARGET_FILTER={list(non_target_filter)}")
-    logging.info(f"[BUILD_PAIRS] Leading target words shifted: {leading_shifted}")
+    log.info(f"[FILTER] Dropped {dropped_non_target} non-target filler words using NON_TARGET_FILTER={list(non_target_filter)}")
+    log.info(f"[BUILD_PAIRS] Leading target words shifted: {leading_shifted}")
 
     return pairs, dropped_non_target
 
@@ -895,7 +931,7 @@ def build_qna_pairs(assigned_data, target_speaker):
     Builds training pairs from a single-speaker recording by identifying
     question-and-answer patterns in the monologue.
     """
-    logging.info("[PAIRS-QNA] Building pairs for single-speaker Q&A scenario.")
+    log.info("[PAIRS-QNA] Building pairs for single-speaker Q&A scenario.")
     
     words = []
     for seg in assigned_data.get("segments", []):
@@ -972,7 +1008,7 @@ def build_qna_pairs(assigned_data, target_speaker):
             "words": a_words,
         })
         
-    logging.info(f"[PAIRS-QNA] Built {len(final_pairs)} Q&A pairs.")
+    log.info(f"[PAIRS-QNA] Built {len(final_pairs)} Q&A pairs.")
     return final_pairs
 
 def build_pairs_detailed(assigned_data, target_speaker):
@@ -1033,7 +1069,7 @@ def build_pairs_detailed(assigned_data, target_speaker):
                     context_words = context_words[-max_in:]
                     context_text = " ".join(context_words)
                     context_len = len(context_words)
-                    logging.debug(f"[PAIRS-D] Truncated detailed context for seg_idx={seg_idx} to {context_len} words (MAX_INPUT_WORDS={max_in})")
+                    log.debug(f"[PAIRS-D] Truncated detailed context for seg_idx={seg_idx} to {context_len} words (MAX_INPUT_WORDS={max_in})")
 
                 pair_data = {
                     "seg_idx": seg_idx,
@@ -1060,7 +1096,7 @@ def build_pairs_detailed(assigned_data, target_speaker):
         else:
             context_buffer.extend(normalized)
 
-    logging.info(f"[PAIRS-D] Built {len(pairs)} detailed pairs for {target_speaker}.")
+    log.info(f"[PAIRS-D] Built {len(pairs)} detailed pairs for {target_speaker}.")
     return pairs
 
 def parse_diarization_json_to_segments(diarization_json_path="podcast.diarization.json"):
@@ -1081,7 +1117,7 @@ def parse_diarization_json_to_segments(diarization_json_path="podcast.diarizatio
     except Exception:
         return segments
 
-    # common pyannote shape: {'uri':..., 'content': [{'segment':{'start':..., 'end':...}, 'label': ...}, ...]}
+    # common pyannote shape: {'uri':..., 'content': [{'segment':{'start':..., 'end':...}, 'label': ...}, ...]}}
     if isinstance(dj, dict) and "content" in dj and isinstance(dj["content"], list):
         for item in dj["content"]:
             if isinstance(item, dict):
@@ -1122,7 +1158,7 @@ def parse_diarization_json_to_segments(diarization_json_path="podcast.diarizatio
 
     # sort by start
     segments = sorted(segments, key=lambda x: x["start"])
-    logging.info(f"[DIAR-PARSE] Parsed {len(segments)} diarization segments from {diarization_json_path}")
+    log.info(f"[DIAR-PARSE] Parsed {len(segments)} diarization segments from {diarization_json_path}")
     return segments
 
 def auto_flag_low_quality_pairs(pairs_meta_path, flagged_out,
@@ -1139,7 +1175,7 @@ def auto_flag_low_quality_pairs(pairs_meta_path, flagged_out,
     flagged_ids = set()
 
     if not os.path.exists(pairs_meta_path):
-        logging.info("[FLAG] No pairs_meta file found (%s) — skipping auto-flag.", pairs_meta_path)
+        log.info("[FLAG] No pairs_meta file found (%s) — skipping auto-flag.", pairs_meta_path)
         return flagged_ids
 
     with open(pairs_meta_path, "r", encoding="utf-8") as f_in, open(flagged_out, "w", encoding="utf-8") as f_out:
@@ -1164,8 +1200,8 @@ def auto_flag_low_quality_pairs(pairs_meta_path, flagged_out,
                 reasons.append("low_conf")
 
             # input/output shape: long input with tiny output
-            input_len = p.get("input_len") or (len(p.get("input","").split()) if p.get("input") else 0)
-            output_len = p.get("output_len") or (len(p.get("output","").split()) if p.get("output") else 0)
+            input_len = p.get("input_len") or (len(p.get("input","" ).split()) if p.get("input") else 0)
+            output_len = p.get("output_len") or (len(p.get("output","" ).split()) if p.get("output") else 0)
             if output_len > 0 and (input_len / max(1, output_len) > long_input_small_output_ratio):
                 reasons.append("long_input_small_output")
 
@@ -1184,7 +1220,7 @@ def auto_flag_low_quality_pairs(pairs_meta_path, flagged_out,
                 flagged.append(flagged_item)
                 flagged_ids.add(seg_idx)
 
-    logging.info(f"[FLAG] Auto-flagged {len(flagged)} pairs to {flagged_out}.")
+    log.info(f"[FLAG] Auto-flagged {len(flagged)} pairs to {flagged_out}.")
     return flagged_ids
 
 def is_semantically_rich(text):
@@ -1239,7 +1275,7 @@ def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_f
                 if other_w is w: continue
                 if other_w.get("speaker") != p.get("output_speaker") and not (other_w.get("end",0) <= w_start or other_w.get("start",0) >= w_end):
                     if isinstance(other_w.get("score"), (int, float)):
-                        competing_scores.append(other_w.get("score"))
+                        competing_scores.append(other_w.get("score") )
             max_comp = max(competing_scores) if competing_scores else 0.0
 
             # dominance rule: only mark overlapped if overlap_frac > threshold AND we are not dominant
@@ -1262,7 +1298,7 @@ def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_f
             p["quality_score"] = qscore
             p["quality_metrics"] = qmetrics
         except Exception as e:
-            logging.debug(f"[SCORE] Failed scoring pair {p.get('seg_idx')}: {e}")
+            log.debug(f"[SCORE] Failed scoring pair {p.get('seg_idx')}: {e}")
             p["quality_score"] = 0.0
             p["quality_metrics"] = {}
 
@@ -1315,8 +1351,8 @@ def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_f
     with open(overlap_summary_out_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
 
-    logging.info(f"[OVERLAP] Wrote pairs_with_overlap_meta.jsonl ({len(pairs_meta)}) and pairs_clean.jsonl ({len(pairs_clean)}).")
-    logging.info(f"[OVERLAP] Summary: {summary}")
+    log.info(f"[OVERLAP] Wrote pairs_with_overlap_meta.jsonl ({len(pairs_meta)}) and pairs_clean.jsonl ({len(pairs_clean)}).")
+    log.info(f"[OVERLAP] Summary: {summary}")
     return summary
 
 def score_pair_quality(pair, weights=None, punc_bonus=0.1, ratio_floor=0.3, ratio_ceiling=4.0):
@@ -1370,7 +1406,7 @@ def score_pair_quality(pair, weights=None, punc_bonus=0.1, ratio_floor=0.3, rati
     input_speakers = set()
     for w in words:
         if w.get("speaker") and w.get("speaker") != pair.get("output_speaker"):
-            input_speakers.add(w.get("speaker"))
+            input_speakers.add(w.get("speaker") )
     diversity = min(1.0, len(input_speakers) / 2.0)
 
     # combine weighted
@@ -1409,7 +1445,7 @@ def postfilter_clean_pairs(clean_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF):
     dropped_len, dropped_conf, dropped_semantic = 0, 0, 0
     short_reply_conf_threshold = SHORT_REPLY_MIN_CONF
 
-    for p in clean_pairs:
+    for p in tqdm(clean_pairs, desc="Applying final filters", leave=False):
         output_len = p.get("output_len", 0)
         avg_score = p.get("avg_score")
 
@@ -1442,7 +1478,7 @@ def postfilter_clean_pairs(clean_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF):
             "dropped_by_semantic": dropped_semantic
         }
     }
-    logging.info(f"[POSTFILTER] Filtering complete. Kept {len(final_pairs)}/{len(clean_pairs)} pairs.")
+    log.info(f"[POSTFILTER] Filtering complete. Kept {len(final_pairs)}/{len(clean_pairs)} pairs.")
     return final_pairs, summary
 
 def identify_speaker(samples_folder, averaged_speaker_embeddings, threshold=IDENTIFY_THRESHOLD):
@@ -1459,14 +1495,14 @@ def identify_speaker(samples_folder, averaged_speaker_embeddings, threshold=IDEN
     try:
         _, target_avg_emb = load_reference_embeddings(samples_folder)
     except Exception as e:
-        logging.error(f"[IDENTIFY] Could not load reference embeddings: {e}")
+        log.error(f"[IDENTIFY] Could not load reference embeddings: {e}")
         return None, None
 
     # Use the pre-computed embeddings passed into the function
     avg_embs = averaged_speaker_embeddings
 
     if not avg_embs:
-        logging.warning("[IDENTIFY] Averaging per-speaker embeddings failed or produced no results.")
+        log.warning("[IDENTIFY] Averaging per-speaker embeddings failed or produced no results.")
         return None, None
 
     # similarity: 1 - cosine_distance  (range ~ -1..1 but for normalized embeddings ~0..1)
@@ -1477,19 +1513,19 @@ def identify_speaker(samples_folder, averaged_speaker_embeddings, threshold=IDEN
             dist = cosine(emb, target_avg_emb)  # smaller distance = closer
             similarity = 1.0 - dist
         except Exception as e:
-            logging.debug(f"[IDENTIFY] cosine failed for speaker {sp}: {e}")
+            log.debug(f"[IDENTIFY] cosine failed for speaker {sp}: {e}")
             continue
-        logging.info(f"[IDENTIFY] speaker {sp} similarity={similarity:.4f} (dist={dist:.4f})")
+        log.info(f"[IDENTIFY] speaker {sp} similarity={similarity:.4f} (dist={dist:.4f})")
         if similarity > best_similarity:
             best_similarity = similarity
             best_speaker = sp
 
     # threshold check: require some minimum similarity
     if best_speaker is None or (best_similarity < threshold):
-        logging.warning(f"[IDENTIFY] Best speaker {best_speaker} has similarity {best_similarity:.4f} < threshold {threshold}. Rejecting.")
+        log.warning(f"[IDENTIFY] Best speaker {best_speaker} has similarity {best_similarity:.4f} < threshold {threshold}. Rejecting.")
         return None, None
 
-    logging.info(f"[IDENTIFY] Selected target speaker {best_speaker} (similarity={best_similarity:.4f})")
+    log.info(f"[IDENTIFY] Selected target speaker {best_speaker} (similarity={best_similarity:.4f})")
     return best_speaker, float(best_similarity)
 
 def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_size=WHISPER_BATCH_SIZE,
@@ -1499,12 +1535,12 @@ def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_si
     transcribe each chunk, then stitch the segments back together into a 
     single Whisper-style result dict with adjusted segment timestamps.
     """
-    logging.info("[TRANSCRIBE-VAD] Using neural VAD for audio segmentation...")
+    log.info("[TRANSCRIBE-VAD] Using neural VAD for audio segmentation...")
 
     # Use the pipeline's superior neural VAD with fallback to get speech segments
     # This is more robust than the previous energy-based pydub method.
     if not os.path.exists(wav_path):
-        logging.error(f"[TRANSCRIBE-VAD] WAV file not found at {wav_path}. Cannot perform VAD. Please ensure it's created before this step.")
+        log.error(f"[TRANSCRIBE-VAD] WAV file not found at {wav_path}. Cannot perform VAD. Please ensure it's created before this step.")
         # Fallback to full-file transcription if WAV is missing
         return model.transcribe(audio_path, batch_size=batch_size, language=language)
         
@@ -1517,7 +1553,7 @@ def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_si
 
     # If VAD found nothing, fall back to full-file transcription.
     if not nonsilent_intervals_ms:
-        logging.warning("[TRANSCRIBE-VAD] VAD returned no voiced intervals — falling back to full-file transcription.")
+        log.warning("[TRANSCRIBE-VAD] VAD returned no voiced intervals — falling back to full-file transcription.")
         return model.transcribe(audio_path, batch_size=batch_size, language=language)
 
     merged_result = {"language": None, "segments": []}
@@ -1534,7 +1570,7 @@ def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_si
                 # remove unsupported kwargs when calling model.transcribe
                 res = model.transcribe(tmp_path, batch_size=batch_size, language=language)
             except Exception as e:
-                logging.warning(f"[TRANSCRIBE-VAD] Transcription failed for segment {i} [{start_ms}..{end_ms}]: {e}")
+                log.warning(f"[TRANSCRIBE-VAD] Transcription failed for segment {i} [{start_ms}..{end_ms}]: {e}")
                 continue
 
             # set language if not set
@@ -1550,12 +1586,12 @@ def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_si
                 merged_result["segments"].append(seg_adj)
 
     if "language" not in merged_result or merged_result["language"] is None:
-        logging.warning("[TRANSCRIBE] No language detected. Forcing 'en'.")
+        log.warning("[TRANSCRIBE] No language detected. Forcing 'en'.")
         merged_result["language"] = "en"
 
     # sort segments by start time to be safe
     merged_result["segments"] = sorted(merged_result["segments"], key=lambda s: s.get("start", 0.0))
-    logging.info("[TRANSCRIBE-VAD] Transcribed %d voiced intervals into %d segments.",
+    log.info("[TRANSCRIBE-VAD] Transcribed %d voiced intervals into %d segments.",
                  len(nonsilent_intervals_ms), len(merged_result["segments"]))
 
     return merged_result
@@ -1575,7 +1611,7 @@ def contextual_reid_with_embeddings(audio_segment, word_start, word_end, target_
         with tempfile.TemporaryDirectory() as td:
             audio = audio_segment
             if audio is None:
-                logging.error("[REID] audio_segment object not provided to contextual_reid_with_embeddings.")
+                log.error("[REID] audio_segment object not provided to contextual_reid_with_embeddings.")
                 return 0.0, False
             s_ms = int(start * 1000); e_ms = int(end * 1000)
             tmp_path = os.path.join(td, "ctx_reid.wav")
@@ -1588,16 +1624,20 @@ def contextual_reid_with_embeddings(audio_segment, word_start, word_end, target_
             accept = sim >= similarity_threshold
             return float(sim), bool(accept)
     except Exception as e:
-        logging.debug(f"[REID] contextual reid failed: {e}")
+        log.debug(f"[REID] contextual reid failed: {e}")
         return 0.0, False
     
-# -------------------------
-# Run pipeline
-# -------------------------
-def run_pipeline(input_audio_path):
+# ==================================================================
+# 🚀 Main execution block
+# ==================================================================
+def run_pipeline(input_audio_path, models):
+    """
+    Main processing function for a single audio file.
+    Accepts pre-loaded models to avoid reloading in a batch process.
+    """
     # --- Dynamic Path Generation ---
     base_name = os.path.splitext(os.path.basename(input_audio_path))[0]
-    logging.info(f"--- Starting pipeline for: {base_name} ---")
+    log.info(f"--- Starting pipeline for: {base_name} ---")
 
     # Define all paths dynamically, placing them in the correct folders
     wav_path = os.path.join(CACHE_FOLDER, f"{base_name}.wav")
@@ -1622,34 +1662,40 @@ def run_pipeline(input_audio_path):
     # ------------------------------
     # STEP 1: Transcribe audio → text with WhisperX
     # ------------------------------
-    logging.info("[STEP] 1 ... Transcribe audio → text with WhisperX")
+    log.info("[STEP] 1 ... Transcribe audio -> text with WhisperX")
 
     # Ensure we have a WAV copy for VAD and libraries needing PCM
+    audio_duration_seconds = 0
     if not os.path.exists(wav_path):
         try:
             audio = AudioSegment.from_file(input_audio_path)
             audio.set_channels(1).set_frame_rate(16000).export(wav_path, format="wav")
-            logging.info(f"[AUDIO] Exported WAV copy for VAD: {wav_path}")
+            audio_duration_seconds = len(audio) / 1000.0
+            log.info(f"[AUDIO] Exported WAV copy for VAD: {wav_path}")
         except Exception as e:
-            logging.warning(f"[AUDIO] Could not export WAV copy: {e}")
+            log.warning(f"[AUDIO] Could not export WAV copy: {e}")
+    else:
+        try:
+            audio_duration_seconds = len(AudioSegment.from_file(wav_path)) / 1000.0
+        except Exception:
+            pass # Will be logged later if it fails
 
     result = None  # Initialize result to be safe
     if os.path.exists(transcript_cache):
-        logging.info(f"[CACHE] Loading cached transcript from {transcript_cache}...")
+        log.info(f"[CACHE] Loading cached transcript from {transcript_cache}...")
         with open(transcript_cache, "r", encoding="utf-8") as f:
             result = json.load(f)
     else:
-        logging.info("[TRANSCRIBE] Running WhisperX transcription...")
-        model = whisperx.load_model(WHISPER_MODEL, device=device)
+        log.info("[TRANSCRIBE] Running WhisperX transcription...")
         if USE_VAD:
             result = transcribe_with_vad(
-                model,
+                models['whisper'],
                 input_audio_path,
                 wav_path=wav_path,
                 batch_size=WHISPER_BATCH_SIZE,
             )
         else:
-            result = model.transcribe(
+            result = models['whisper'].transcribe(
                 input_audio_path,
                 batch_size=WHISPER_BATCH_SIZE,
                 language="en"
@@ -1662,11 +1708,11 @@ def run_pipeline(input_audio_path):
 
     # After attempting to load or create, check if the result is valid
     if not result or not result.get("segments"):
-        logging.error(f"Transcription failed or produced no segments for {base_name}. Skipping this file.")
-        return  # This safely exits the function for the current file
+        log.error(f"Transcription failed or produced no segments for {base_name}. Skipping this file.")
+        return -1  # Return error code
 
     if not result.get("language"):
-        logging.warning("[LANG] Transcript missing language — forcing 'en'")
+        log.warning("[LANG] Transcript missing language — forcing 'en'")
         result["language"] = "en"
 
     start_time = mark_step(f"Transcription for {base_name}", start_time)
@@ -1674,15 +1720,16 @@ def run_pipeline(input_audio_path):
     # ------------------------------
     # STEP 2: Align transcript to audio (word-level timestamps)
     # ------------------------------
-    logging.info("[STEP] 2 ... Align transcript to audio")
+    log.info("[STEP] 2 ... Align transcript to audio")
     if os.path.exists(alignment_cache):
-        logging.info(f"[CACHE] Loading cached alignment from {alignment_cache}...")
+        log.info(f"[CACHE] Loading cached alignment from {alignment_cache}...")
         with open(alignment_cache, "r", encoding="utf-8") as f:
             result_aligned = json.load(f)
     else:
-        logging.info("[ALIGN] Running WhisperX alignment...")
-        alignment_model, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-        result_aligned = whisperx.align(result["segments"], alignment_model, metadata, input_audio_path, device)
+        log.info("[ALIGN] Running WhisperX alignment...")
+        with tqdm(total=1, desc="Aligning transcript") as pbar:
+            result_aligned = whisperx.align(result["segments"], models['align'], models['align_meta'], input_audio_path, device)
+            pbar.update(1)
         with open(alignment_cache, "w", encoding="utf-8") as f:
             json.dump(result_aligned, f, ensure_ascii=False, indent=2)
 
@@ -1691,9 +1738,9 @@ def run_pipeline(input_audio_path):
     # ------------------------------
     # STEP 3: Speaker diarization (who spoke when)
     # ------------------------------
-    logging.info("[STEP] 3 ... Speaker diarization (who spoke when)")
+    log.info("[STEP] 3 ... Speaker diarization (who spoke when)")
     if os.path.exists(diar_cache):
-        logging.info(f"[CACHE] Loading cached diarization from {diar_cache}...")
+        log.info(f"[CACHE] Loading cached diarization from {diar_cache}...")
         with open(diar_cache, "r", encoding="utf-8") as f:
             diarization_json = json.load(f)
 
@@ -1702,9 +1749,18 @@ def run_pipeline(input_audio_path):
             seg = entry["segment"]
             diarization[Segment(seg["start"], seg["end"])] = entry["label"]
     else:
-        logging.info("[CACHE] No cached diarization found, generating anew...")
-        diarize_model = whisperx.DiarizationPipeline(use_auth_token=HF_TOKEN, device=device)
-        diarization_df = diarize_model(input_audio_path)
+        log.info("[CACHE] No cached diarization found, generating anew...")
+        try:
+            with tqdm(total=1, desc="Diarizing speakers") as pbar:
+                diarization_df = models['diarize'](input_audio_path)
+                pbar.update(1)
+        except Exception as e:
+            log.error(f"[DIARIZE] Diarization failed. This is often due to an invalid Hugging Face token or not accepting the model's terms of use.")
+            log.error(f"[DIARIZE] Please ensure you have a valid token and have accepted the terms at:")
+            log.error(f"[DIARIZE] https://huggingface.co/pyannote/speaker-diarization")
+            log.error(f"[DIARIZE] https://huggingface.co/pyannote/segmentation")
+            log.error(f"[DIARIZE] Original error: {e}", exc_info=True)
+            raise
 
         diarization = Annotation(uri=base_name)
         for _, row in diarization_df.iterrows():
@@ -1713,13 +1769,13 @@ def run_pipeline(input_audio_path):
         diarization_dict = {
             "uri": base_name,
             "content": [
-                {"segment": {"start": row["start"], "end": row["end"]}, "label": row["speaker"]}
+                {"segment": {"start": row["start"], "end": row["end"]}, "label": row["speaker"]} 
                 for _, row in diarization_df.iterrows()
             ],
         }
         with open(diar_cache, "w", encoding="utf-8") as f:
             json.dump(diarization_dict, f, ensure_ascii=False, indent=2)
-        logging.info(f"[CACHE] Saved new diarization to {diar_cache}")
+        log.info(f"[CACHE] Saved new diarization to {diar_cache}")
     
     if not isinstance(diarization, Annotation):
         raise TypeError(f"Expected pyannote.core.Annotation, got {type(diarization)}")
@@ -1728,14 +1784,14 @@ def run_pipeline(input_audio_path):
     # ------------------------------
     # STEP 4: Assign speakers to transcript words
     # ------------------------------
-    logging.info("[STEP] 4 ... Assign speakers to transcript words")
+    log.info("[STEP] 4 ... Assign speakers to transcript words")
     if os.path.exists(assign_cache):
-        logging.info(f"[CACHE] Loading cached speaker assignment from {assign_cache}...")
+        log.info(f"[CACHE] Loading cached speaker assignment from {assign_cache}...")
         with open(assign_cache, "r", encoding="utf-8") as f:
             result_aligned = json.load(f)
     else:
-        logging.info("[ASSIGN] Running safe speaker assignment...")
-        result_aligned = safe_assign_word_speakers(diarization, result_aligned, diar_cache_path=diar_cache)
+        log.info("[ASSIGN] Running safe speaker assignment...")
+        result_aligned = safe_assign_word_speakers(diarization, result_aligned, diar_cache_path=diar_cache, base_name=base_name)
         
         with open(assign_cache, "w", encoding="utf-8") as f:
             json.dump(result_aligned, f, ensure_ascii=False, indent=2)
@@ -1745,12 +1801,12 @@ def run_pipeline(input_audio_path):
     # ------------------------------
     # STEP 5: Build training pairs
     # ------------------------------
-    logging.info("[STEP] 5 ... Build training pairs")
-    logging.info("[AUDIO] Loading main audio segment for processing...")
+    log.info("[STEP] 5 ... Build training pairs")
+    log.info("[AUDIO] Loading main audio segment for processing...")
     try:
         main_audio_segment = AudioSegment.from_file(wav_path)
     except Exception as e:
-        logging.error(f"[AUDIO] Could not load main audio segment from {wav_path}: {e}")
+        log.error(f"[AUDIO] Could not load main audio segment from {wav_path}: {e}")
         main_audio_segment = None
     
     # First, compute all speaker embeddings once. This is now the single source of truth.
@@ -1760,8 +1816,8 @@ def run_pipeline(input_audio_path):
     best_speaker, best_score = identify_speaker("samples", speaker_embs)
 
     if not best_speaker:
-        logging.error(f"[PIPELINE] No reference speaker identified for {base_name}. Skipping pair generation.")
-        return
+        log.error(f"[PIPELINE] No reference speaker identified for {base_name}. Skipping pair generation.")
+        return -1
 
     # Load assigned segments
     with open(assign_cache, "r", encoding="utf-8") as f:
@@ -1784,7 +1840,7 @@ def run_pipeline(input_audio_path):
         # If only one speaker was diarized OR the target speaks > 98% of the words
         if len(speaker_word_counts) == 1 or (target_speaker_words / total_word_count) > 0.98:
             is_single_speaker_scenario = True
-            logging.info(f"[PIPELINE] Single-speaker Q&A scenario detected for {base_name}.")
+            log.info(f"[PIPELINE] Single-speaker Q&A scenario detected for {base_name}.")
 
     # --- Scenario-based Pair Building ---
     if is_single_speaker_scenario:
@@ -1800,14 +1856,14 @@ def run_pipeline(input_audio_path):
             p["quality_score"] = score
             p["quality_metrics"] = metrics
         
-        logging.info(f"[PIPELINE] Final output for {base_name} written to '{FINAL_OUTPUT}' ({len(final_pairs)} kept).")
+        log.info(f"[PIPELINE] Final output for {base_name} written to '{FINAL_OUTPUT}' ({len(final_pairs)} kept).")
         with open(FINAL_OUTPUT, "w", encoding="utf-8") as f:
             for p in final_pairs:
                 # Q&A pairs should not have empty inputs, but handle defensively
                 if not p.get("input", "").strip():
                     p["input"] = "[MISSING QUESTION]"
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")
-        return # End processing for this file
+        return 0 # End processing for this file
 
     # --- Normalize words across all segments (Standard Multi-Speaker Path) ---
     flat_words = []
@@ -1829,27 +1885,27 @@ def run_pipeline(input_audio_path):
 
     # Adaptive confidence cutoff
     words_conf, removed_conf, cutoffs = adaptive_conf_filter(flat_words)
-    logging.info(f"[ADAPTIVE] Removed {len(removed_conf)} words below cutoffs: {cutoffs}")
+    log.info(f"[ADAPTIVE] Removed {len(removed_conf)} words below cutoffs: {cutoffs}")
 
     # Run neural VAD with fallback
     vad_segments = run_vad_with_fallback(wav_path, vad_mult=CFG.get("VAD_MULT", 1.0))
 
     # Keep only words that overlap speech according to VAD
     words_vad = [w for w in words_conf if overlaps_vad(w, vad_segments)]
-    logging.info(f"[VAD] Kept {len(words_vad)} words after speech activity check")
+    log.info(f"[VAD] Kept {len(words_vad)} words after speech activity check")
 
     # Compute speaker embeddings for contextual re-ID (optional, potentially slow)
     try:
         speaker_embs = compute_speaker_embeddings(wav_path, diarization)
         target_emb = speaker_embs.get(best_speaker)
     except Exception as e:
-        logging.warning(f"[EMBED] Could not compute speaker embeddings for re-ID: {e}")
+        log.warning(f"[EMBED] Could not compute speaker embeddings for re-ID: {e}")
         target_emb = None
 
-    # Reassignment correction (short target words mis-assigned).
+    # Reassignment correction (short target words mis-assigned). 
     words_reassigned = reassign_short_target_words(words_vad, best_speaker, window=1.0,
                                                    audio_segment=main_audio_segment, target_emb=target_emb)
-    logging.info(f"[REASSIGN] Applied correction for short words near target speaker (reassigned -> {len([w for w in words_reassigned if w.get('speaker')==best_speaker])} target words)")
+    log.info(f"[REASSIGN] Applied correction for short words near target speaker (reassigned -> {len([w for w in words_reassigned if w.get('speaker')==best_speaker])} target words)")
 
     # Rebuild segments from filtered + reassigned words
     segments_final = regroup_words_to_segments(words_reassigned)
@@ -1897,7 +1953,7 @@ def run_pipeline(input_audio_path):
         low_conf_threshold=LOW_CONFIDENCE_THRESHOLD,
         long_input_small_output_ratio=INPUT_TO_OUTPUT_RATIO
     )
-    logging.info(f"[FLAG] {len(flagged_ids)} pairs flagged for manual review ({base_name}_pairs_flagged.jsonl).")
+    log.info(f"[FLAG] {len(flagged_ids)} pairs flagged for manual review ({base_name}_pairs_flagged.jsonl).")
 
     # Phase C: Post-filter
     clean_pairs_from_file = []
@@ -1907,7 +1963,7 @@ def run_pipeline(input_audio_path):
                 if not line.strip(): continue
                 clean_pairs_from_file.append(json.loads(line))
     except Exception:
-        logging.warning(f"[POSTFILTER] {PAIRS_CLEAN_OUT} not found — skipping postfilter.")
+        log.warning(f"[POSTFILTER] {PAIRS_CLEAN_OUT} not found — skipping postfilter.")
     
     # Run the new, consolidated filtering function to get the final list directly.
     final_pairs, post_summary = postfilter_clean_pairs(
@@ -1923,7 +1979,7 @@ def run_pipeline(input_audio_path):
         # We need to re-read the detailed "meta" pairs to get the word-level data for scoring
         # This is a bit inefficient, but ensures we use the best score.
         # A more advanced refactor could pass this data through the pipeline.
-        score, metrics = score_pair_quality(p) 
+        score, metrics = score_pair_quality(p)
         p["quality_score"] = score
         p["quality_metrics"] = metrics
 
@@ -1932,7 +1988,7 @@ def run_pipeline(input_audio_path):
     borderline_pairs = [p for p in final_pairs if 0.4 <= p.get("quality_score", 0.0) < 0.7]
     flagged_pairs = [p for p in final_pairs if p.get("quality_score", 0.0) < 0.4]
 
-    logging.info(f"[QUALITY] Clean={len(clean_pairs)}, Borderline={len(borderline_pairs)}, Flagged={len(flagged_pairs)}")
+    log.info(f"[QUALITY] Clean={len(clean_pairs)}, Borderline={len(borderline_pairs)}, Flagged={len(flagged_pairs)}")
     
     # Write the detailed, accurate metrics to the CSV
     with open(METRICS_CSV_OUT, "w", newline="", encoding="utf-8") as csvfile:
@@ -1970,98 +2026,104 @@ def run_pipeline(input_audio_path):
         try:
             shutil.move(tmp_summary_path, POSTFILTER_SUMMARY_OUT)
         except Exception:
-            logging.warning("[PIPELINE] Could not rename temp postfilter summary")
+            log.warning("[PIPELINE] Could not rename temp postfilter summary")
 
-    logging.info(f"[PIPELINE] Replaced {original_empty_input_count} empty inputs with [CONTEXT CONTINUES].")
-    logging.info(f"[PIPELINE] Final output for {base_name} written to '{os.path.join(RESULTS_FOLDER, base_name)}_results.jsonl' ({len(final_pairs)} kept).")
+    log.info(f"[PIPELINE] Replaced {original_empty_input_count} empty inputs with [CONTEXT CONTINUES].")
+    log.info(f"[PIPELINE] Final output for {base_name} written to '{os.path.join(RESULTS_FOLDER, base_name)}_results.jsonl' ({len(final_pairs)} kept).")
 
-    # ==========================
+    # --- Calculate final metrics for summary ---
+    target_speech_duration = sum(w['end'] - w['start'] for w in flat_words if w.get('speaker') == best_speaker and w.get('start') is not None and w.get('end') is not None)
+    final_avg_conf = statistics.mean([p['avg_score'] for p in final_pairs if p.get('avg_score') is not None]) if final_pairs else 0.0
+    post_filter_counts = post_summary.get('counts', {})
+
+    # ========================== 
     # FINAL PIPELINE SUMMARY
-    # ==========================
-    logging.info("========================================")
-    logging.info(f"📊 FINAL DATASET SUMMARY FOR: {base_name}")
-    logging.info("========================================")
-    logging.info(f"🎙️  Target identified as       : {best_speaker} (score = {best_score:.4f})")
-    logging.info(f"📝  Words attributed to Target : {target_word_count}")
-    logging.info(f"💬  Raw pairs (pre-merge)      : {len(pairs_detailed)}")
-    logging.info(f"🔗  After merging (gap={MERGE_GAP}s)   : {len(pairs_merged)}")
-    logging.info(f"🚫  Overlaps tagged            : {overlap_summary.get('overlapped_words', 0)} words "
+    # ========================== 
+    log.info("========================================")
+    log.info(f"📊 FINAL DATASET SUMMARY FOR: {base_name}")
+    log.info("========================================")
+    log.info(f"⚙️  Audio duration             : {time.strftime('%H:%M:%S', time.gmtime(audio_duration_seconds))}")
+    log.info(f"🎙️  Target identified as       : {best_speaker} (score = {best_score:.4f})")
+    log.info(f"🗣️  Target speech time         : {time.strftime('%H:%M:%S', time.gmtime(target_speech_duration))} ({target_speech_duration/audio_duration_seconds:.1%})")
+    log.info(f"📝  Words attributed to Target : {target_word_count}")
+    log.info(f"💬  Raw pairs (pre-merge)      : {len(pairs_detailed)}")
+    log.info(f"🔗  After merging (gap={MERGE_GAP}s)   : {len(pairs_merged)}")
+    log.info(f"🚫  Overlaps tagged            : {overlap_summary.get('overlapped_words', 0)} words "
                  f"({overlap_summary.get('overlap_rate', 0.0):.1%})")
-    logging.info(f"🧹  Clean pairs before filter  : {overlap_summary.get('pairs_clean_count', 0)}")
-    logging.info(f"⚖️  Filtering rules            : min_words={MIN_WORDS}, min_conf={MIN_CONF}")
-    logging.info(f"✅  Final usable pairs         : {len(final_pairs)}")
-    logging.info(f"📭  Pairs with empty input     : {original_empty_input_count} ({original_empty_input_pct:.1f}%) → replaced")
-    logging.info(f"❌  Dropped by length          : {post_summary['counts']['dropped_by_length']}")
-    logging.info(f"❌  Dropped by confidence      : {post_summary['counts']['dropped_by_conf']}")
-    logging.info(f"❌  Dropped by semantics       : {post_summary['counts']['dropped_by_semantic']}")
-    logging.info(f"❌  Noise filter               : {dropped_non_target} words dropped by non-target word filter")
-    logging.info(f"🚩  Flagged for review         : {flagged_count} pairs in {os.path.basename(PAIRS_FLAGGED_OUT)}")
-    logging.info("========================================")
-
-    if not KEEP_DEBUG_OUTPUTS:
-        debug_files_to_remove = [
-            PAIRS_MERGED_OUT,
-            PAIRS_META_OUT,
-            PAIRS_CLEAN_OUT,
-            POSTFILTER_SUMMARY_OUT,
-        ]
-        for fn in debug_files_to_remove:
-            try:
-                if os.path.exists(fn): os.remove(fn)
-            except Exception as e:
-                logging.warning("[CLEANUP] Could not remove %s: %s", fn, e)
-    else:
-        logging.info(f"[PIPELINE] Debug outputs kept for {base_name}.")
+    log.info(f"🧹  Clean pairs before filter  : {overlap_summary.get('pairs_clean_count', 0)}")
+    log.info(f"📉  Pairs dropped by filters   : {post_filter_counts.get('dropped_by_length', 0)} (length), "
+                 f"{post_filter_counts.get('dropped_by_conf', 0)} (confidence), "
+                 f"{post_filter_counts.get('dropped_by_semantic', 0)} (semantic)")
+    log.info(f"🚩  Pairs flagged for review   : {flagged_count}")
+    log.info(f"✅  Final usable pairs         : {len(final_pairs)} (avg conf: {final_avg_conf:.2f})")
+    log.info(f"📭  Pairs with empty input     : {original_empty_input_count} ({original_empty_input_pct:.1f}%) → replaced")
     
-    start_time = mark_step(f"Build training pairs for {base_name}", start_time)
+    return 0 # Success
 
+# ==================================================================
+# 🚀 Main execution block
+# ==================================================================
 def main():
     """
-    Main entry point. Finds audio files in the AUDIO_FOLDER
-    and runs the full pipeline for each one.
+    Main function to load models once and process all audio files in a batch.
     """
-    # --- Timing Start ---
     overall_start_time = time.time()
-    per_file_timings = {}
-
-    AUDIO_FOLDER = "audio_files"
-    # Create all necessary directories if they don't exist
-    for folder in [AUDIO_FOLDER, CACHE_FOLDER, RESULTS_FOLDER, SYS_FOLDER]:
-        os.makedirs(folder, exist_ok=True)
-
-    # --- Setup Time Calculation ---
-    setup_duration = time.time() - overall_start_time
-    step_timings["Script Setup"] = setup_duration # Store setup time
-
-    # Define supported audio file extensions
-    supported_extensions = (".mp3", ".wav", ".m4a", ".flac", ".ogg")
     
-    audio_files = [
-        f for f in os.listdir(AUDIO_FOLDER) 
-        if f.lower().endswith(supported_extensions)
-    ]
+    # --- Pre-load all models ---
+    models = {}
+    model_names = ["Whisper", "Alignment", "Diarization"]
+    with tqdm(total=len(model_names), desc="Loading AI models") as pbar:
+        try:
+            pbar.set_postfix_str("Whisper...")
+            models['whisper'] = whisperx.load_model(WHISPER_MODEL, device=device)
+            pbar.update(1)
 
+            pbar.set_postfix_str("Alignment...")
+            # A bit of a hack to get the language, we assume the first transcript is representative
+            # A better way would be to run transcription for all, then alignment for all.
+            # For now, we'll just use the default language.
+            models['align'], models['align_meta'] = whisperx.load_align_model(language_code=LANGUAGE, device=device)
+            pbar.update(1)
+
+            pbar.set_postfix_str("Diarization...")
+            models['diarize'] = whisperx.DiarizationPipeline(use_auth_token=HF_TOKEN, device=device)
+            pbar.update(1)
+        except Exception as e:
+            log.error(f"Fatal error during model loading: {e}", exc_info=True)
+            log.error("This is often due to an invalid Hugging Face token or network issues.")
+            log.error("Please ensure you have a valid HF_TOKEN and have accepted the terms for pyannote models on HuggingFace.")
+            return
+
+    setup_time = time.time() - overall_start_time
+    
+    # --- Find and process audio files ---
+    audio_folder = "audio_files"
+    audio_files = [os.path.join(audio_folder, f) for f in os.listdir(audio_folder) if f.lower().endswith((".wav", ".mp3", ".m4a"))]
+    
     if not audio_files:
-        logging.warning(f"No audio files found in '{AUDIO_FOLDER}'.")
+        log.warning(f"No audio files found in '{audio_folder}'. Nothing to do.")
         return
 
-    logging.info(f"Found {len(audio_files)} audio file(s) to process: {audio_files}")
-
-    for filename in tqdm(audio_files, desc="Processing files"):
-        file_start_time = time.time()
-        try:
-            file_path = os.path.join(AUDIO_FOLDER, filename)
-            run_pipeline(file_path)
-            per_file_timings[filename] = time.time() - file_start_time
-        except Exception as e:
-            logging.exception(f"Pipeline failed for file: {filename}")
-            per_file_timings[filename] = -1 # Mark as failed
-            continue # Continue to the next file
+    log.info(f"Found {len(audio_files)} audio file(s) to process.")
     
-    # --- Final Summary ---
-    overall_duration = time.time() - overall_start_time
-    print_final_batch_summary(setup_duration, per_file_timings, overall_duration)
+    per_file_times = {}
+    for audio_file in audio_files:
+        file_start_time = time.time()
+        # Use a try-except block to gracefully handle errors per file
+        try:
+            result_code = run_pipeline(audio_file, models)
+            file_duration = time.time() - file_start_time
+            if result_code == 0:
+                per_file_times[os.path.basename(audio_file)] = file_duration
+            else:
+                per_file_times[os.path.basename(audio_file)] = -1 # Indicate failure
+        except Exception as e:
+            log.error(f"An unexpected error occurred while processing {audio_file}: {e}", exc_info=True)
+            per_file_times[os.path.basename(audio_file)] = -1
+
+
+    total_time = time.time() - overall_start_time
+    print_final_batch_summary(setup_time, per_file_times, total_time)
 
 if __name__ == "__main__":
     main()
-    

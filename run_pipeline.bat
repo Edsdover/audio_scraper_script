@@ -5,6 +5,9 @@ REM ==============================
 REM   Podcast Pipeline (Windows)
 REM ==============================
 
+REM Set console to UTF-8 to support emoji characters in output
+chcp 65001 > NUL
+
 REM Change to script directory
 cd /d "%~dp0"
 

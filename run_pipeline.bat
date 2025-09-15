@@ -42,6 +42,17 @@ if not exist "cache" mkdir "cache"
 if not exist "results" mkdir "results"
 echo [INFO] Created data folders (audio_files, cache, results).
 
+REM Check for Hugging Face Token
+if not defined HF_TOKEN (
+  echo.
+  echo [SETUP] Hugging Face token not found.
+  echo To download the required speaker identification models, you need a free HF token.
+  echo 1. Go to https://huggingface.co/settings/tokens
+  echo 2. Create a token with the 'read' role.
+  echo 3. Paste it here:
+  set /p HF_TOKEN="Enter your Hugging Face Token: "
+)
+
 echo.
 echo Running pipeline...
 echo.

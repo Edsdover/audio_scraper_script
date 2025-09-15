@@ -172,10 +172,11 @@ try:
 except Exception as e:
     logging.warning(f"[SETUP] NLTK stopwords download failed: {e}. Proceeding with an empty stopword list.")
     STOPWORDS = set()
-HF_TOKEN = os.getenv("HF_TOKEN") # safer than hardcoding, user must set env var
-if HF_TOKEN is None:
-    HF_TOKEN = "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"
-    logging.warning("[SETUP] No HuggingFace token found in environment variable HF_TOKEN.")
+HF_TOKEN = os.getenv("HF_TOKEN")
+if not HF_TOKEN:
+    logging.error("[SETUP] CRITICAL: Hugging Face token (HF_TOKEN) not found.")
+    logging.error("[SETUP] Please provide your token by running the script via `run_pipeline.bat` or by setting the HF_TOKEN environment variable.")
+    sys.exit(1)
 
 step_timings = {} # collect per-step durations
 device = "cuda" if torch.cuda.is_available() else "cpu"

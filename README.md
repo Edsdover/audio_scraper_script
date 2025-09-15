@@ -19,13 +19,18 @@ A reproducible audio-to-dataset pipeline that transforms long-form podcast audio
 ## 🚀 Quickstart
 
 1.  **Clone the Repo**:
-2.  **Install python**:
+2.  **Install Python**:
     * Install **Python 3.11** (required).
-2.  **Place Your Files**:
+3.  **Get a Hugging Face Token**:
+    * This pipeline requires a Hugging Face token to download pre-trained models for speaker diarization.
+    * Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) to get one. You'll need a free account.
+    * Create a new **User Access Token**, giving it a name (e.g., "podcast_pipeline") and the `read` role.
+4.  **Place Your Files**:
     * Place all your source audio files into the `audio_files/` folder.
     * Place your target speaker's voice samples into the `samples/` folder.
-3.  **Run the Pipeline**:
-    * On Windows, simply double-click `run_pipeline.bat`. It will create the environment, install dependencies, and start the process.
+5.  **Run the Pipeline**:
+    * On Windows, simply double-click `run_pipeline.bat`.
+    * It will create the environment, install dependencies, and **prompt you to enter your Hugging Face token** if it's not already set in your environment.
 
 **Input**: `audio_files/` folder & `samples/` folder
 **Output**: `results/{base_name}_results.jsonl` for each input file.
@@ -44,7 +49,7 @@ For the best speaker identification accuracy, follow these guidelines for the au
 
 * Python **3.11+**
 * Torch (CUDA build for GPU acceleration)
-* Hugging Face token (`HF_TOKEN`) for WhisperX/pyannote
+* **Required**: A Hugging Face token (`HF_TOKEN`) to download the speaker diarization models. See the [Quickstart](#-quickstart) for instructions.
 ---
 
 ## ⚙️ Configuration Knobs

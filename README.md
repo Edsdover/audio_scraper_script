@@ -18,19 +18,62 @@ A reproducible audio-to-dataset pipeline that transforms long-form podcast audio
 
 ## 🚀 Quickstart
 
-1.  **Clone the Repo**:
-2.  **Install Python**:
-    * Install **Python 3.11** (required).
-3.  **Get a Hugging Face Token**:
-    * This pipeline requires a Hugging Face token to download pre-trained models for speaker diarization.
-    * Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) to get one. You'll need a free account.
-    * Create a new **User Access Token**, giving it a name (e.g., "podcast_pipeline") and the `read` role.
-4.  **Place Your Files**:
-    * Place all your source audio files into the `audio_files/` folder.
-    * Place your target speaker's voice samples into the `samples/` folder.
-5.  **Run the Pipeline**:
-    * On Windows, simply double-click `run_pipeline.bat`.
-    * It will create the environment, install dependencies, and **prompt you to enter your Hugging Face token** if it's not already set in your environment.
+### 1. Install Prerequisites
+
+*   **Python**: Install **Python 3.11** (required).
+*   **FFmpeg**:
+    *   **Windows**: No action needed. The script will download it automatically if it's not found.
+    *   **macOS**: Install via [Homebrew](https://brew.sh/): `brew install ffmpeg`
+    *   **Linux (Debian/Ubuntu)**: `sudo apt-get update && sudo apt-get install ffmpeg`
+
+### 2. Clone the Repo & Set Up
+
+```bash
+git clone <repository_url>
+cd <repository_folder>
+```
+
+### 3. Get a Hugging Face Token
+
+This pipeline requires a Hugging Face token to download pre-trained models for speaker diarization.
+1.  Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) to get one (you'll need a free account).
+2.  Create a new **User Access Token**, giving it a name (e.g., "podcast_pipeline") and the `read` role.
+3.  The first time you run the script, it will prompt you to enter this token.
+
+### 4. Install Dependencies (PyTorch + Other Libraries)
+
+It is highly recommended to install PyTorch *before* installing the other packages, as it has platform-specific builds.
+
+1.  **Install PyTorch**: Follow the official instructions at [pytorch.org](https://pytorch.org/get-started/locally/) for your specific OS and GPU setup (CUDA/MPS/CPU).
+    *   **Example (CPU-only)**:
+        ```bash
+        pip install torch torchvision torchaudio
+        ```
+    *   **Example (NVIDIA GPU with CUDA 11.8)**:
+        ```bash
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+        ```
+
+2.  **Install Other Libraries**:
+    *   **Windows**: Double-click `run_pipeline.bat`. It will create the virtual environment and install dependencies automatically.
+    *   **macOS/Linux**: Run the setup script:
+        ```bash
+        bash run_pipeline.sh
+        ```
+    This will create a virtual environment in `sys/venv/` and install the remaining packages from `requirements.txt`.
+
+### 5. Place Your Files
+
+*   Place all your source audio files into the `audio_files/` folder.
+*   Place your target speaker's voice samples into the `samples/` folder.
+
+### 6. Run the Pipeline
+
+*   **Windows**: Double-click `run_pipeline.bat`.
+*   **macOS/Linux**:
+    ```bash
+    bash run_pipeline.sh
+    ```
 
 **Input**: `audio_files/` folder & `samples/` folder
 **Output**: `results/{base_name}_results.jsonl` for each input file.
@@ -56,11 +99,11 @@ For the best speaker identification accuracy, follow these guidelines for the au
 
 All primary settings are located at the top of `podcast_pipeline_gpu.py` for easy tuning.
 
-* `KEEP_DEBUG_OUTPUTS` # `True` keeps all intermediate files; `False` deletes them, saving only `results.jsonl`.
+* `KEEP_DEBUG_OUTPUTS` # If `True`, keeps detailed diagnostic files (e.g., `_pairs_flagged.jsonl`, `_pair_quality_metrics.csv`) for tuning and analysis. If `False`, all intermediate files will be deleted.
 
 ### Pair Building & Filtering
 * `MERGE_GAP` # Defines the max silence (in seconds) between replies from the target speaker before they are merged into a single response.
-* `MIN_WORDS` # Sets the minimum word count for a target's reply to be included in the dataset.
+* `MIN_WORDS` # Minimum word count for a reply. The pipeline is tuned to keep high-confidence single-word replies (e.g., "Exactly!"), so the default is `1`.
 * `MIN_CONF` # Sets a minimum average word confidence for a reply. Can be set to `None` to disable.
 * `OVERLAP_FRAC` # (fraction) If more than this % of a word overlaps with another speaker, drop it.
 * `MAX_INPUT_WORDS` # Sets a hard limit on the number of words included in the input context to prevent excessively long prompts.
@@ -90,9 +133,9 @@ This project uses a clean folder structure to separate inputs, outputs, and syst
 * **`audio_files/`**: Place your source audio files (e.g., `.mp3`, `.wav`) here.
 * **`samples/`**: Place short, clean audio clips of your target speaker's voice here.
 * **`results/`**: Contains the final, cleaned `.jsonl` training data after a successful run.
-* **`cache/`**: Contains all intermediate files: `.wav` conversions, `.json` caches, debug logs, and quality reports. This folder can be safely deleted to force a clean run.
-* **`sys/`**: Contains the core system files: the Python script, virtual environment (`venv`), and FFMPEG. You should not need to modify this folder.
-* **`run_pipeline.bat`**: The main script to execute the entire pipeline.
+* **`cache/`**: Stores intermediate files to speed up subsequent runs (e.g., transcription, alignment). It also contains valuable diagnostic files for tuning (`_pairs_flagged.jsonl`, `_pair_quality_metrics.csv`). You can safely delete this folder to force a completely fresh run.
+* **`sys/`**: Contains the core system files: the Python script, virtual environment (`venv`), and FFMPEG (on Windows). You should not need to modify this folder.
+* **`run_pipeline.bat`**: The main script to execute the entire pipeline on **Windows**.
 
 ---
 

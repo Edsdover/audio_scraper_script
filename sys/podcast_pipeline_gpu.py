@@ -40,7 +40,7 @@ LANGUAGE = "en"
 # WhisperX Supports the following for transcription: Afrikaans, Albanian, Amharic, Arabic, Armenian, Assamese, Azerbaijani, Bashkir, Basque, Belarusian, Bengali, Bosnian, Breton, Bulgarian, Burmese, Castilian, Catalan, Chinese, Croatian, Czech, Danish, Dutch, English, Estonian, Faroese, Finnish, Flemish, French, Galician, Georgian, German, Greek, Gujarati, Haitian Creole, Hausa, Hawaiian, Hebrew, Hindi, Hungarian, Icelandic, Indonesian, Italian, Japanese, Javanese, Kannada, Kazakh, Khmer, Korean, Lao, Latin, Latvian, Letzeburgesch, Lithuanian, Luxembourgish, Macedonian, Malagasy, Malay, Malayalam, Maltese, Maori, Marathi, Moldavian, Moldovan, Mongolian, Nepali, Norwegian, Nynorsk, Occitan, Pashto, Persian, Polish, Portuguese, Punjabi, Pushto, Romanian, Russian, Sanskrit, Serbian, Shona, Sindhi, Sinhala, Slovak, Slovenian, Somali, Spanish, Sundanese, Swahili, Swedish, Tagalog, Tajik, Tamil, Tatar, Telugu, Thai, Tibetan, Turkish, Turkmen, Ukrainian, Urdu, Uzbek, Valencian, Vietnamese, Welsh, Yiddish, Yoruba.
 # --- Pair building & filtering ---
 MERGE_GAP = 2.0 # (seconds) Merge Target’s replies if the silence between them is shorter than this.
-MIN_WORDS = 2 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
+MIN_WORDS = 1 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
 MIN_CONF = 0.6 # (0.0–1.0 or None) Drop replies with avg confidence below this. Set None to disable.
 OVERLAP_FRAC = 0.70 # (fraction) If more than this % of a word overlaps with another speaker, drop it.
 
@@ -335,7 +335,7 @@ def score_pair(pair, all_words, target_label):
     ratio = min(input_len / output_len if output_len > 0 else 0, 4.0)
     out_text = (pair.get("output") or "").strip()
     complete = 1.0 if out_text and out_text[-1] in ".?!" else 0.0
-
+    
     final = 0.5 * conf + 0.3 * ratio + 0.2 * complete
     return {"confidence": conf, "ratio": ratio, "complete": complete, "score": final}
 
@@ -361,10 +361,8 @@ def compute_speaker_embeddings(audio_file, diarization, min_duration=MIN_EMB_DUR
         # Accept pyannote.Annotation via itertracks or fallback to list/dict
         if hasattr(diarization, "itertracks"):
             tracks = list(diarization.itertracks(yield_label=True))
-            iterator = ((seg, label) if len(item := (seg, track, label))==3 else None for (seg, track, label) in tracks)  # readable form not used
             for track in tqdm(diarization.itertracks(yield_label=True), desc="Computing embeddings"):
-                seg = track[0]
-                label = track[-1]
+                seg, _, label = track
                 dur = seg.end - seg.start
                 if dur < min_duration:
                     continue
@@ -491,16 +489,16 @@ def load_reference_embeddings(samples_folder):
 def print_final_batch_summary(setup_time, per_file_times, total_time):
     """Prints a final, comprehensive summary for the entire batch run."""
     log.info("\n" + "="*50)
-    log.info("📊 BATCH PROCESSING SUMMARY")
+    log.info("BATCH PROCESSING SUMMARY")
     log.info("="*50)
 
     # Format and print setup time
     s_mins, s_secs = divmod(int(setup_time), 60)
-    log.info(f"⚙️  Script Setup Time : {s_mins}m {s_secs}s")
+    log.info(f"Script Setup Time : {s_mins}m {s_secs}s")
     log.info("-"*50)
 
     # Format and print per-file times
-    log.info("📄 Per-File Processing Times:")
+    log.info("Per-File Processing Times:")
     if not per_file_times:
         log.info("  No files were processed.")
     else:
@@ -514,7 +512,7 @@ def print_final_batch_summary(setup_time, per_file_times, total_time):
     
     # Format and print total time
     t_mins, t_secs = divmod(int(total_time), 60)
-    log.info(f"⏱️  Total Run Time    : {t_mins}m {t_secs}s")
+    log.info(f"Total Run Time    : {t_mins}m {t_secs}s")
     log.info("="*50 + "\n")
 
 def safe_assign_word_speakers(diarize_segments, result, diar_cache_path, base_name):
@@ -674,9 +672,9 @@ def run_energy_vad(wav_path, frame_ms=30, vad_mult=CFG["VAD_MULT"]):
     segs, cur = [], None
     for i,f in enumerate(flags):
         t0=i*frame_ms/1000; t1=(i+1)*frame_ms/1000
-        if f: cur=[t0,t1] if cur is None else [cur[0],t1]
-        elif cur: segs.append(tuple(cur)); cur=None
-    if cur: segs.append(tuple(cur))
+        if f: cur=[t0,t1] if cur is None else [cur[0],t1] # merge
+        elif cur: segs.append(tuple(cur)); cur=None # end segment
+    if cur: segs.append(tuple(cur)) # add last segment if active
     return segs
 
 def run_vad_with_fallback(wav_path, vad_mult=CFG["VAD_MULT"], hf_token_env="HF_HUB_TOKEN"):
@@ -1105,6 +1103,7 @@ def parse_diarization_json_to_segments(diarization_json_path="podcast.diarizatio
     Tolerant parser for diarization JSON files (pyannote .to_json() or other shapes).
     Returns list of dicts: {'start':float,'end':float,'speaker':label}
     """
+
     def safe_float(x):
         try:
             return float(x)
@@ -1226,11 +1225,11 @@ def auto_flag_low_quality_pairs(pairs_meta_path, flagged_out,
 
 def is_semantically_rich(text):
     """
-    Returns True if text has at least 2 unique non-stopword tokens.
+    Returns True if text has at least 1 unique non-stopword tokens.
     """
     tokens = re.findall(r"\w+", text.lower())
     content = [t for t in tokens if t not in STOPWORDS]
-    return len(set(content)) >= 2
+    return len(set(content)) >= 1
 
 def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_frac, meta_out_path, clean_out_path, overlap_summary_out_path):
     """
@@ -1341,12 +1340,13 @@ def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_f
         for pc in pairs_clean:
             f.write(json.dumps(pc, ensure_ascii=False) + "\n")
 
+    overlap_rate = overlapped_words / total_words if total_words > 0 else 0.0
     summary = {
         "pairs_meta_count": len(pairs_meta),
         "pairs_clean_count": len(pairs_clean),
         "total_words": total_words,
         "overlapped_words": overlapped_words,
-        "overlap_rate": overlapped_words / total_words if total_words else 0.0,
+        "overlap_rate": overlap_rate,
         "clean_drop_rate": 1 - (len(pairs_clean) / len(pairs_meta) if pairs_meta else 1)
     }
     with open(overlap_summary_out_path, "w", encoding="utf-8") as f:
@@ -1378,8 +1378,7 @@ def score_pair_quality(pair, weights=None, punc_bonus=0.1, ratio_floor=0.3, rati
     avg_conf = float(statistics.mean(confs)) if confs else float(pair.get("avg_score") or 0.0)
 
     # overlap: fraction of words flagged overlapped
-    overlapped_count = sum(1 for w in words if bool(w.get("overlapped")))
-    overlap_rate = overlapped_count / max(1, len(words))
+    overlap_rate = sum(1 for w in words if w.get("overlapped")) / len(words) if words else 0.0
 
     # input / output lengths
     input_len = int(pair.get("input_len") or 0)
@@ -1557,10 +1556,10 @@ def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_si
         log.warning("[TRANSCRIBE-VAD] VAD returned no voiced intervals — falling back to full-file transcription.")
         return model.transcribe(audio_path, batch_size=batch_size, language=language)
 
-    merged_result = {"language": None, "segments": []}
+    merged_result = {"language": None, "segments": []} # Initialize merged_result
     
     with tempfile.TemporaryDirectory() as td:
-        for i, (start_ms, end_ms) in enumerate(tqdm(nonsilent_intervals_ms, desc="Transcribing segments")):
+        for i, (start_ms, end_ms) in enumerate(tqdm(nonsilent_intervals_ms, desc="Transcribing segments", leave=False)):
             # Export segment
             seg = audio[start_ms:end_ms]
             tmp_path = os.path.join(td, f"vad_seg_{i}.wav")
@@ -1587,7 +1586,7 @@ def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_si
                 merged_result["segments"].append(seg_adj)
 
     if "language" not in merged_result or merged_result["language"] is None:
-        log.warning("[TRANSCRIBE] No language detected. Forcing 'en'.")
+        log.warning("[LANG] Transcript missing language — forcing 'en'")
         merged_result["language"] = "en"
 
     # sort segments by start time to be safe
@@ -1628,6 +1627,25 @@ def contextual_reid_with_embeddings(audio_segment, word_start, word_end, target_
         log.debug(f"[REID] contextual reid failed: {e}")
         return 0.0, False
     
+def cleanup_redundant_files(base_name):
+    """Remove temporary files that are less useful for debugging to reduce clutter."""
+    if not KEEP_DEBUG_OUTPUTS:
+        log.info("[CLEANUP] Skipping cleanup since KEEP_DEBUG_OUTPUTS is False.")
+        return
+
+    log.info("[CLEANUP] Removing redundant intermediate cache files...")
+    files_to_delete = [
+        os.path.join(CACHE_FOLDER, f"{base_name}_pairs_merged.jsonl"),
+        os.path.join(CACHE_FOLDER, f"{base_name}_pairs_clean.jsonl"),
+    ]
+    for f_path in files_to_delete:
+        if os.path.exists(f_path):
+            try:
+                os.remove(f_path)
+                log.info(f"[CLEANUP]   - Deleted: {os.path.basename(f_path)}")
+            except OSError as e:
+                log.warning(f"[CLEANUP]   - Failed to delete {os.path.basename(f_path)}: {e}")
+
 # ==================================================================
 # 🚀 Main execution block
 # ==================================================================
@@ -1864,6 +1882,8 @@ def run_pipeline(input_audio_path, models):
                 if not p.get("input", "").strip():
                     p["input"] = "[MISSING QUESTION]"
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")
+        
+        cleanup_redundant_files(base_name)
         return 0 # End processing for this file
 
     # --- Normalize words across all segments (Standard Multi-Speaker Path) ---
@@ -2001,6 +2021,10 @@ def run_pipeline(input_audio_path, models):
             row.update(p.get("quality_metrics", {}))
             writer.writerow(row)
 
+    cleanup_redundant_files(base_name)
+    log.info(f"--- Finished pipeline for: {base_name} ---")
+    return 0
+
     def _is_empty_input(pair):
         inp = pair.get("input")
         return inp is None or (isinstance(inp, str) and not inp.strip())
@@ -2043,21 +2067,18 @@ def run_pipeline(input_audio_path, models):
     log.info("========================================")
     log.info(f"📊 FINAL DATASET SUMMARY FOR: {base_name}")
     log.info("========================================")
-    log.info(f"⚙️  Audio duration             : {time.strftime('%H:%M:%S', time.gmtime(audio_duration_seconds))}")
-    log.info(f"🎙️  Target identified as       : {best_speaker} (score = {best_score:.4f})")
-    log.info(f"🗣️  Target speech time         : {time.strftime('%H:%M:%S', time.gmtime(target_speech_duration))} ({target_speech_duration/audio_duration_seconds:.1%})")
-    log.info(f"📝  Words attributed to Target : {target_word_count}")
-    log.info(f"💬  Raw pairs (pre-merge)      : {len(pairs_detailed)}")
-    log.info(f"🔗  After merging (gap={MERGE_GAP}s)   : {len(pairs_merged)}")
-    log.info(f"🚫  Overlaps tagged            : {overlap_summary.get('overlapped_words', 0)} words "
-                 f"({overlap_summary.get('overlap_rate', 0.0):.1%})")
-    log.info(f"🧹  Clean pairs before filter  : {overlap_summary.get('pairs_clean_count', 0)}")
-    log.info(f"📉  Pairs dropped by filters   : {post_filter_counts.get('dropped_by_length', 0)} (length), "
-                 f"{post_filter_counts.get('dropped_by_conf', 0)} (confidence), "
-                 f"{post_filter_counts.get('dropped_by_semantic', 0)} (semantic)")
-    log.info(f"🚩  Pairs flagged for review   : {flagged_count}")
-    log.info(f"✅  Final usable pairs         : {len(final_pairs)} (avg conf: {final_avg_conf:.2f})")
-    log.info(f"📭  Pairs with empty input     : {original_empty_input_count} ({original_empty_input_pct:.1f}%) → replaced")
+    log.info(f"Audio duration             : {time.strftime('%H:%M:%S', time.gmtime(audio_duration_seconds))}")
+    log.info(f"Target identified as       : {best_speaker} (score = {best_score:.4f})")
+    log.info(f"Target speech time         : {time.strftime('%H:%M:%S', time.gmtime(target_speech_duration))} ({target_speech_duration/audio_duration_seconds:.1%})")
+    log.info(f"Words attributed to Target : {target_word_count}")
+    log.info(f"Raw pairs (pre-merge)      : {len(pairs_detailed)}")
+    log.info(f"After merging (gap={MERGE_GAP}s)   : {len(pairs_merged)}")
+    log.info(f"Overlaps tagged            : {overlap_summary.get('overlapped_words', 0)} words \n                 ({overlap_summary.get('overlap_rate', 0.0):.1%})")
+    log.info(f"Clean pairs before filter  : {overlap_summary.get('pairs_clean_count', 0)}")
+    log.info(f"Pairs dropped by filters   : {post_filter_counts.get('dropped_by_length', 0)} (length), \n                 {post_filter_counts.get('dropped_by_conf', 0)} (confidence), \n                 {post_filter_counts.get('dropped_by_semantic', 0)} (semantic)")
+    log.info(f"Pairs flagged for review   : {flagged_count}")
+    log.info(f"Final usable pairs         : {len(final_pairs)} (avg conf: {final_avg_conf:.2f})")
+    log.info(f"Pairs with empty input     : {original_empty_input_count} ({original_empty_input_pct:.1f}%)")
     
     return 0 # Success
 
@@ -2107,7 +2128,7 @@ def main():
 
     log.info(f"Found {len(audio_files)} audio file(s) to process.")
     
-    per_file_times = {}
+    per_file_times = {} # Initialize per_file_times
     for audio_file in audio_files:
         file_start_time = time.time()
         # Use a try-except block to gracefully handle errors per file

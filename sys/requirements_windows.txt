@@ -13,6 +13,7 @@ scikit-learn==1.5.0
 # Transformers & tokenizers (compatible pair)
 transformers==4.33.2
 tokenizers==0.13.3
+huggingface-hub==0.25.0
 
 # WhisperX + deps
 whisperx==3.2.0
@@ -29,6 +30,8 @@ speechbrain==1.0.3
 
 # Resemblyzer (voice embeddings)
 resemblyzer @ https://github.com/resemble-ai/Resemblyzer/archive/refs/heads/master.zip
+
+sentence-transformers==2.2.2
 
 # Torch stack (CUDA 11.8 builds for Windows + Py311)
 --find-links https://download.pytorch.org/whl/torch_stable.html

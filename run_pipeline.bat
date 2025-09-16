@@ -56,7 +56,9 @@ if not defined HF_TOKEN (
 echo.
 echo Running pipeline...
 echo.
-
+for /f "tokens=*" %%i in ('dir /b /s "%cd%\cache\pipeline_*.log"') do (
+    echo "Log file created at: %%i"
+)
 call ".\%SYS_FOLDER%\venv\Scripts\python.exe" "%SYS_FOLDER%\podcast_pipeline_gpu.py"
 
 echo.

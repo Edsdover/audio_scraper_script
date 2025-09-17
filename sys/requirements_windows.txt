@@ -9,6 +9,7 @@ soundfile==0.12.1
 matplotlib==3.9.0
 pandas==2.2.2
 scikit-learn==1.5.0
+nltk==3.8.1
 
 # Transformers & tokenizers (compatible pair)
 transformers==4.33.2

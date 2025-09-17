@@ -29,6 +29,7 @@ from pyannote.core import Annotation, Segment
 from resemblyzer import VoiceEncoder, preprocess_wav
 from scipy.spatial.distance import cosine
 from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize
 from collections import defaultdict
 from sentence_transformers import SentenceTransformer, util
 import pandas as pd
@@ -43,22 +44,25 @@ KEEP_DEBUG_OUTPUTS = True # True = keep merged/clean/overlap files, False = only
 LANGUAGE = "en"
 # WhisperX Supports the following for transcription: Afrikaans, Albanian, Amharic, Arabic, Armenian, Assamese, Azerbaijani, Bashkir, Basque, Belarusian, Bengali, Bosnian, Breton, Bulgarian, Burmese, Castilian, Catalan, Chinese, Croatian, Czech, Danish, Dutch, English, Estonian, Faroese, Finnish, Flemish, French, Galician, Georgian, German, Greek, Gujarati, Haitian Creole, Hausa, Hawaiian, Hebrew, Hindi, Hungarian, Icelandic, Indonesian, Italian, Japanese, Javanese, Kannada, Kazakh, Khmer, Korean, Lao, Latin, Latvian, Letzeburgesch, Lithuanian, Luxembourgish, Macedonian, Malagasy, Malay, Malayalam, Maltese, Maori, Marathi, Moldavian, Moldovan, Mongolian, Nepali, Norwegian, Nynorsk, Occitan, Pashto, Persian, Polish, Portuguese, Punjabi, Pushto, Romanian, Russian, Sanskrit, Serbian, Shona, Sindhi, Sinhala, Slovak, Slovenian, Somali, Spanish, Sundanese, Swahili, Swedish, Tagalog, Tajik, Tamil, Tatar, Telugu, Thai, Tibetan, Turkish, Turkmen, Ukrainian, Urdu, Uzbek, Valencian, Vietnamese, Welsh, Yiddish, Yoruba.
 # --- Pair building & filtering ---
-MERGE_GAP = 2.0 # (seconds) Merge Target’s replies if the silence between them is shorter than this.
-MIN_WORDS = 7 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
-MIN_CONF = 0.6 # (0.0–1.0 or None) Drop replies with avg confidence below this. Set None to disable.
-OVERLAP_FRAC = 0.70 # (fraction) If more than this % of a word overlaps with another speaker, drop it.
-SEMANTIC_SIMILARITY_THRESHOLD = 0.5
+MERGE_GAP = 3.0 # (seconds) Merge Target’s replies if the silence between them is shorter than this.
+MIN_WORDS = 5 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
+MIN_CONF = 0.5 # (0.0–1.0 or None) Drop replies with avg confidence below this. Set None to disable.
+OVERLAP_FRAC = 0.80 # (fraction) If more than this % of a word overlaps with another speaker, drop it.
+MIN_QUALITY_SCORE = 0.55 # (0.0-1.0) Minimum quality score to keep a pair.
 
 # --- Speaker identification ---
 IDENTIFY_THRESHOLD = 0.70 # (0.0–1.0) How strict to be when matching Target’s voice to a diarized speaker.
 CONTEXTUAL_REID_THRESHOLD = 0.72 # (0.0-1.0) Similarity threshold for re-assigning short words.
 
 # --- Quality scoring weights ---
-WEIGHT_CONF = 2.0
+WEIGHT_AVG_CONF = 0.5
 WEIGHT_OVERLAP = 1.0
-WEIGHT_INPUT_LEN = 1.0
-WEIGHT_OUTPUT_LEN = 1.5
+WEIGHT_RATIO = 1.0
+WEIGHT_SIMILARITY = 1.0
 WEIGHT_PUNC = 0.5
+WEIGHT_DIVERSITY = 0.5
+WEIGHT_INPUT_LEN = 0.1
+WEIGHT_OUTPUT_LEN = 0.1
 
 # --- Advanced fine-tuning ---
 REASSIGN_WINDOW = 1.0 # (seconds) Time window to check for neighboring speakers when reassigning short words.
@@ -89,6 +93,7 @@ INPUT_TO_OUTPUT_RATIO = 10.0      # (ratio) Flag a pair if input_len / output_le
 
 # --- Constants ---
 MAX_INPUT_WORDS = 50 # Cap host inputs (truncate if longer)
+MAX_RATIO = 4.0 # Filter out pairs where input_len / output_len > this value
 
 # --- File paths ---
 CACHE_FOLDER = "cache"
@@ -156,9 +161,10 @@ NON_TARGET_FILTER = {
 # ------------------------- 
 try:
     nltk.download('stopwords', quiet=True)
+    nltk.download('punkt', quiet=True)
     STOPWORDS = set(stopwords.words("english"))
 except Exception as e:
-    logging.warning(f"[SETUP] NLTK stopwords download failed: {e}. Proceeding with an empty stopword list.")
+    logging.warning(f"[SETUP] NLTK data download failed: {e}. Proceeding with an empty stopword list.")
     STOPWORDS = set()
 HF_TOKEN = os.getenv("HF_TOKEN")
 if not HF_TOKEN:
@@ -1054,8 +1060,25 @@ def build_pairs_detailed(assigned_data, target_speaker):
                 tend = max(ends) if ends else None
                 scores = [w["score"] for w in reply_words if isinstance(w.get("score"), (int, float))]
                 avg_score = statistics.mean(scores) if scores else None
-                # Build raw context text
-                context_text = " ".join([c["text"] for c in context_buffer]).strip()
+                # Build structured, turn-based context
+                structured_context = []
+                if context_buffer:
+                    current_speaker = context_buffer[0]['speaker']
+                    current_text = []
+                    for word in context_buffer:
+                        if word['speaker'] == current_speaker:
+                            current_text.append(word['text'])
+                        else:
+                            if current_text:
+                                structured_context.append(f"{current_speaker}: \"{ ' '.join(current_text) }\"")
+                            current_speaker = word['speaker']
+                            current_text = [word['text']]
+                    if current_text:
+                        structured_context.append(f"{current_speaker}: \"{ ' '.join(current_text) }\"")
+                    context_text = " ".join(structured_context)
+                else:
+                    context_text = ""
+                
                 context_words = context_text.split()
                 context_len = len(context_words)
 
@@ -1092,7 +1115,7 @@ def build_pairs_detailed(assigned_data, target_speaker):
                 is_first_pair = False # Unset flag after processing the first potential pair
 
             # reset context
-            # context_buffer = []
+            context_buffer = []
         else:
             context_buffer.extend(normalized)
 
@@ -1224,7 +1247,7 @@ def auto_flag_low_quality_pairs(pairs_meta_path, flagged_out,
     log.info(f"[FLAG] Auto-flagged {len(flagged)} pairs to {flagged_out}.")
     return flagged_ids
 
-def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_frac, meta_out_path, clean_out_path, overlap_summary_out_path):
+def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_frac, meta_out_path, clean_out_path, overlap_summary_out_path, model=None):
     """
     Tag per-word overlap fraction (relative to non-target speakers),
     write pairs_with_overlap_meta.jsonl and pairs_clean.jsonl (clean=drop overlapped words).
@@ -1287,7 +1310,7 @@ def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_f
 
         # compute quality score and attach
         try:
-            qscore, qmetrics = score_pair_quality(p)
+            qscore, qmetrics = score_pair_quality(p, model=model)
             p["quality_score"] = qscore
             p["quality_metrics"] = qmetrics
         except Exception as e:
@@ -1349,11 +1372,12 @@ def compute_overlap_and_write(pairs_detailed, diarization_object, overlap_word_f
     log.info(f"[OVERLAP] Summary: {summary}")
     return summary
 
-def score_pair_quality(pair, weights=None, punc_bonus=0.1, ratio_floor=0.3, ratio_ceiling=4.0):
+
+def score_pair_quality(pair, model, weights=None, punc_bonus=0.1, ratio_floor=0.3, ratio_ceiling=4.0):
     """
     Compute a soft quality score for a single pair_meta dict.
     Returns (score, metrics_dict).
-    Metrics included: avg_conf, overlap_rate, input_len, output_len, ratio, punc_ok, speaker_diversity.
+    Metrics included: avg_conf, overlap_rate, input_len, output_len, ratio, punc_ok, speaker_diversity, semantic_similarity.
     Weight defaults tuned conservatively.
     """
     # This function now uses the global WEIGHT_* constants
@@ -1371,31 +1395,58 @@ def score_pair_quality(pair, weights=None, punc_bonus=0.1, ratio_floor=0.3, rati
     input_len = int(pair.get("input_len") or 0)
     output_len = int(pair.get("output_len") or 0)
     
+    # Ratio score
+    ratio = (input_len / output_len) if output_len > 0 else 0
+    ratio_score = 1 / (1 + ratio)
+
     input_len_score = min(input_len / MAX_INPUT_WORDS, 1.0)
     output_len_score = 1 / (1 + math.exp(-(output_len - 5)))
 
 
-    # punctuation heuristic on output
-    out_text = (pair.get("output") or "").strip()
-    punc_ok = 1.0 if out_text.endswith((".", "?", "!")) else 0.5
-    punc_score = punc_ok
+    # Granular punctuation score based on sentence completion
+    output_text = (pair.get("output") or "").strip()
+    if not output_text:
+        punc_score = 0.0
+    else:
+        sentences = sent_tokenize(output_text)
+        if not sentences:
+            punc_score = 0.0
+        else:
+            punctuated_sentences = sum(1 for s in sentences if s.strip().endswith(('.', '?', '!')))
+            punc_score = punctuated_sentences / len(sentences)
 
     # speaker diversity of input: prefer at least 2 input speakers (normalized)
     input_speakers = set()
     for w in words:
         if w.get("speaker") and w.get("speaker") != pair.get("output_speaker"):
             input_speakers.add(w.get("speaker") )
-    diversity = min(1.0, len(input_speakers) / 2.0)
+    diversity_score = min(1.0, len(input_speakers) / 2.0)
+
+    # Semantic Similarity
+    input_text = pair.get("input", "")
+    semantic_similarity = 0.0
+    if model is not None and input_text and output_text:
+        embeddings = model.encode([input_text, output_text])
+        semantic_similarity = util.cos_sim(embeddings[0], embeddings[1]).item()
 
     # Combine scores using a weighted average.
-    total_weight = WEIGHT_CONF + WEIGHT_OVERLAP + WEIGHT_INPUT_LEN + WEIGHT_OUTPUT_LEN + WEIGHT_PUNC
-    score = (
-        avg_conf * WEIGHT_CONF +
-        overlap_score * WEIGHT_OVERLAP +
-        input_len_score * WEIGHT_INPUT_LEN +
-        output_len_score * WEIGHT_OUTPUT_LEN +
-        punc_score * WEIGHT_PUNC
-    ) / total_weight
+    total_weight = (WEIGHT_AVG_CONF + WEIGHT_OVERLAP + WEIGHT_RATIO + WEIGHT_SIMILARITY + 
+                    WEIGHT_PUNC + WEIGHT_DIVERSITY + WEIGHT_INPUT_LEN + WEIGHT_OUTPUT_LEN)
+    
+    # Handle potential division by zero if all weights are zero
+    if total_weight == 0:
+        score = 0.0
+    else:
+        score = (
+            avg_conf * WEIGHT_AVG_CONF +
+            overlap_score * WEIGHT_OVERLAP +
+            ratio_score * WEIGHT_RATIO +
+            semantic_similarity * WEIGHT_SIMILARITY +
+            punc_score * WEIGHT_PUNC +
+            diversity_score * WEIGHT_DIVERSITY +
+            input_len_score * WEIGHT_INPUT_LEN +
+            output_len_score * WEIGHT_OUTPUT_LEN
+        ) / total_weight
 
 
     # clamp to [0,1]
@@ -1406,9 +1457,11 @@ def score_pair_quality(pair, weights=None, punc_bonus=0.1, ratio_floor=0.3, rati
         "overlap_rate": overlap_rate,
         "input_len": input_len,
         "output_len": output_len,
-        "ratio": (input_len / output_len) if output_len > 0 else None,
-        "punc_ok": bool(punc_ok),
-        "diversity": diversity
+        "ratio": ratio,
+        "ratio_score": ratio_score,
+        "punc_score": punc_score,
+        "diversity_score": diversity_score,
+        "semantic_similarity": semantic_similarity
     }
 
     return float(score), metrics
@@ -1421,23 +1474,22 @@ def is_semantically_rich(text):
     content = [t for t in tokens if t not in STOPWORDS]
     return len(set(content)) >= 1
 
-def postfilter_clean_pairs(clean_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF, model=None):
+def postfilter_clean_pairs(clean_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF, min_quality_score=MIN_QUALITY_SCORE):
     """
     Consolidated final filter.
     - Filters by length, keeping high-confidence short replies.
     - Filters by overall confidence.
-    - Filters for semantic richness.
-    - Filters for semantic similarity between input and output.
+    - Filters by a minimum quality score.
     Returns the final list of pairs and a summary dictionary.
     """
     final_pairs = []
-    dropped_len, dropped_conf, dropped_semantic, dropped_similarity = 0, 0, 0, 0
+    dropped_len, dropped_conf, dropped_quality = 0, 0, 0
     short_reply_conf_threshold = SHORT_REPLY_MIN_CONF
-    dropped_similarity_log = []
 
     for p in tqdm(clean_pairs, desc="Applying final filters", leave=False):
         output_len = p.get("output_len", 0)
         avg_score = p.get("avg_score")
+        quality_score = p.get("quality_score")
 
         # 1. Length and High-Confidence Short Reply Check
         keep_by_len = (output_len >= min_words) or \
@@ -1451,45 +1503,26 @@ def postfilter_clean_pairs(clean_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF, 
             dropped_conf += 1
             continue
             
-        # 3. Semantic Richness Check (now integrated here)
-        if not is_semantically_rich(p.get("output", "")):
-            dropped_semantic += 1
+        # 3. Quality Score Check
+        if quality_score is None or quality_score < min_quality_score:
+            dropped_quality += 1
             continue
-
-        # 4. Semantic Similarity Check
-        if model is not None:
-            input_text = p.get("input", "")
-            output_text = p.get("output", "")
-            if input_text and output_text:
-                embeddings = model.encode([input_text, output_text])
-                similarity = util.cos_sim(embeddings[0], embeddings[1]).item()
-                if similarity < SEMANTIC_SIMILARITY_THRESHOLD:
-                    p['similarity_score'] = similarity
-                    dropped_similarity_log.append(p)
-                    dropped_similarity += 1
-                    continue
         
         final_pairs.append(p)
 
-    # Write dropped pairs to a log file
-    if dropped_similarity_log:
-        with open(os.path.join(CACHE_FOLDER, "dropped_by_similarity.jsonl"), "w", encoding="utf-8") as f:
-            for item in dropped_similarity_log:
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-
     summary = {
-        "params": {"min_words": min_words, "min_conf": min_conf, "short_reply_conf": SHORT_REPLY_MIN_CONF, "semantic_similarity_threshold": SEMANTIC_SIMILARITY_THRESHOLD},
+        "params": {"min_words": min_words, "min_conf": min_conf, "short_reply_conf": SHORT_REPLY_MIN_CONF, "min_quality_score": min_quality_score},
         "counts": {
             "before": len(clean_pairs), 
             "after": len(final_pairs), 
             "dropped_by_length": dropped_len, 
             "dropped_by_conf": dropped_conf,
-            "dropped_by_semantic": dropped_semantic,
-            "dropped_by_semantic_similarity": dropped_similarity
+            "dropped_by_quality": dropped_quality
         }
     }
     log.info(f"[POSTFILTER] Filtering complete. Kept {len(final_pairs)}/{len(clean_pairs)} pairs.")
     return final_pairs, summary
+
 
 def identify_speaker(samples_folder, averaged_speaker_embeddings, threshold=IDENTIFY_THRESHOLD):
     """
@@ -1876,14 +1909,14 @@ def run_pipeline(input_audio_path, models):
         # For Q&A, we build pairs and then run a simplified finalization sequence
         qna_pairs = build_qna_pairs(assigned_data, best_speaker) 
         
-        final_pairs, _ = postfilter_clean_pairs(
-            qna_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF
-        )
-
-        for p in final_pairs:
-            score, metrics = score_pair_quality(p)
+        for p in qna_pairs:
+            score, metrics = score_pair_quality(p, model=models['sentence_transformer'])
             p["quality_score"] = score
             p["quality_metrics"] = metrics
+
+        final_pairs, _ = postfilter_clean_pairs(
+            qna_pairs, min_words=MIN_WORDS, min_conf=MIN_CONF, min_quality_score=MIN_QUALITY_SCORE
+        )
         
         log.info(f"[PIPELINE] Final output for {base_name} written to '{FINAL_OUTPUT}' ({len(final_pairs)} kept).")
         with open(FINAL_OUTPUT, "w", encoding="utf-8") as f:
@@ -1973,7 +2006,8 @@ def run_pipeline(input_audio_path, models):
         overlap_word_frac=OVERLAP_FRAC,
         meta_out_path=PAIRS_META_OUT,
         clean_out_path=PAIRS_CLEAN_OUT,
-        overlap_summary_out_path=OVERLAP_SUMMARY_OUT
+        overlap_summary_out_path=OVERLAP_SUMMARY_OUT,
+        model=models['sentence_transformer']
     )
 
     # Auto-flag suspicious pairs for manual review
@@ -2001,7 +2035,7 @@ def run_pipeline(input_audio_path, models):
         clean_pairs_from_file,
         min_words=MIN_WORDS,
         min_conf=MIN_CONF,
-        model=models['sentence_transformer']
+        min_quality_score=MIN_QUALITY_SCORE
     )
 
     # The list is now final. Proceed directly to scoring and saving.
@@ -2011,7 +2045,7 @@ def run_pipeline(input_audio_path, models):
         # We need to re-read the detailed "meta" pairs to get the word-level data for scoring
         # This is a bit inefficient, but ensures we use the best score.
         # A more advanced refactor could pass this data through the pipeline.
-        score, metrics = score_pair_quality(p)
+        score, metrics = score_pair_quality(p, model=models['sentence_transformer'])
         p["quality_score"] = score
         p["quality_metrics"] = metrics
 

@@ -1,7 +1,7 @@
 # Project Learnings: A Comprehensive Guide to Pipeline Tuning
 
 ## 1. Project Goal
-The primary goal is to process podcast audio to generate high-quality `(context, response)` training pairs for an LLM chatbot parody. A high-quality pair is defined as being semantically relevant, well-transcribed, grammatically complete, conversationally balanced, and free of technical errors like speaker cross-talk.
+The primary goal is to process audio to generate high-quality `(context, response)` training pairs for an LLM chatbot parody. A high-quality pair is defined as being semantically relevant, well-transcribed, grammatically complete, conversationally balanced, and free of technical errors like speaker cross-talk.
 
 ## 2. Recommended Tuning Strategy & Final Configuration
 

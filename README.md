@@ -1,8 +1,8 @@
-# 🎙️ Podcast Processing Pipeline
+# 🎙️ Audio Processing Pipeline
 
 ![Python](https://img.shields.io/badge/python-3.11-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
 
-A reproducible audio-to-dataset pipeline that transforms long-form podcast audio into `(context → response)` training pairs for a target speaker. It uses a sophisticated, multi-factor quality scoring system to ensure the highest quality output.
+A reproducible audio-to-dataset pipeline that transforms audio into `(context → response)` training pairs for a target speaker. It uses a sophisticated, multi-factor quality scoring system to ensure the highest quality output.
 
 For a deep dive into the tuning process and the rationale behind the quality model, see **[learnings.md](learnings.md)**.
 
@@ -33,7 +33,7 @@ For a deep dive into the tuning process and the rationale behind the quality mod
 
 This pipeline requires a Hugging Face token to download pre-trained models for speaker diarization.
 1.  Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) to get one (you'll need a free account).
-2.  Create a new **User Access Token**, giving it a name (e.g., "podcast_pipeline") and the `read` role.
+2.  Create a new **User Access Token**, giving it a name (e.g., "audio_pipeline") and the `read` role.
 3.  The first time you run the script, it will prompt you to enter this token.
 
 ### 3. Install Dependencies (PyTorch + Other Libraries)
@@ -79,7 +79,7 @@ For the best speaker identification accuracy, follow these guidelines for the au
 
 ## ⚙️ Configuration
 
-All primary settings are located at the top of `sys/podcast_pipeline_gpu.py` for easy tuning. The recommended baseline values are set by default.
+All primary settings are located at the top of `sys/audio_pipeline_gpu.py` for easy tuning. The recommended baseline values are set by default.
 
 ### Primary Filters
 *   `MIN_QUALITY_SCORE`: The master threshold. A pair's final combined quality score must exceed this value to be kept. **Default: `0.55`**.
@@ -102,7 +102,7 @@ These weights control the "recipe" for the final quality score. `WEIGHT_SIMILARI
 *   `WEIGHT_INPUT_LEN` / `WEIGHT_OUTPUT_LEN`: Weights for rewarding longer, more substantial conversations. **Default: `0.1`**.
 
 ### Speaker Identification
-*   `IDENTIFY_THRESHOLD`: Similarity score needed to identify the target speaker in the podcast. **Default: `0.70`**.
+*   `IDENTIFY_THRESHOLD`: Similarity score needed to identify the target speaker in the audio. **Default: `0.70`**.
 *   `CONTEXTUAL_REID_THRESHOLD`: Similarity score for re-assigning short, unattributed words to an adjacent speaker. **Default: `0.72`**.
 
 ---

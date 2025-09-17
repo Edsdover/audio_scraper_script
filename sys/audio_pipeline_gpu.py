@@ -1129,7 +1129,7 @@ def build_pairs_detailed(assigned_data, target_speaker):
     log.info(f"[PAIRS-D] Built {len(pairs)} detailed pairs for {target_speaker}.")
     return pairs
 
-def parse_diarization_json_to_segments(diarization_json_path="podcast.diarization.json"):
+def parse_diarization_json_to_segments(diarization_json_path="audio.diarization.json"):
     """
     Tolerant parser for diarization JSON files (pyannote .to_json() or other shapes).
     Returns list of dicts: {'start':float,'end':float,'speaker':label}
@@ -1535,7 +1535,7 @@ def identify_speaker(samples_folder, averaged_speaker_embeddings, threshold=IDEN
     """
     Robust speaker identification:
       - samples_folder: folder of reference audio (one or more files)
-      - audio_file: full podcast path (used for extraction via pydub)
+      - audio_file: full audio path (used for extraction via pydub)
       - diarization: pyannote Annotation or fallback list of segments
       - threshold: similarity threshold (0..1), where higher is more strict
 

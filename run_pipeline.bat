@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 REM ==============================
-REM   Podcast Pipeline (Windows)
+REM   Audio Pipeline (Windows)
 REM ==============================
 
 REM Set console to UTF-8 to support emoji characters in output
@@ -22,7 +22,7 @@ if not exist "%SYS_FOLDER%\venv" (
 
 REM --- Copy core files into the system subfolder ---
 echo [INFO] Preparing system folder...
-copy /Y "podcast_pipeline_gpu.py" "%SYS_FOLDER%\" > NUL
+copy /Y "audio_pipeline_gpu.py" "%SYS_FOLDER%\" > NUL
 copy /Y "requirements_windows.txt" "%SYS_FOLDER%\" > NUL
 
 REM Check pip version
@@ -59,7 +59,7 @@ echo.
 for /f "tokens=*" %%i in ('dir /b /s "%cd%\cache\pipeline_*.log"') do (
     echo "Log file created at: %%i"
 )
-call ".\%SYS_FOLDER%\venv\Scripts\python.exe" "%SYS_FOLDER%\podcast_pipeline_gpu.py"
+call ".\%SYS_FOLDER%\venv\Scripts\python.exe" "%SYS_FOLDER%\audio_pipeline_gpu.py"
 
 echo.
 echo === Pipeline finished ===

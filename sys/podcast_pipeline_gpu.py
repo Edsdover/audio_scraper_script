@@ -45,6 +45,7 @@ LANGUAGE = "en"
 # WhisperX Supports the following for transcription: Afrikaans, Albanian, Amharic, Arabic, Armenian, Assamese, Azerbaijani, Bashkir, Basque, Belarusian, Bengali, Bosnian, Breton, Bulgarian, Burmese, Castilian, Catalan, Chinese, Croatian, Czech, Danish, Dutch, English, Estonian, Faroese, Finnish, Flemish, French, Galician, Georgian, German, Greek, Gujarati, Haitian Creole, Hausa, Hawaiian, Hebrew, Hindi, Hungarian, Icelandic, Indonesian, Italian, Japanese, Javanese, Kannada, Kazakh, Khmer, Korean, Lao, Latin, Latvian, Letzeburgesch, Lithuanian, Luxembourgish, Macedonian, Malagasy, Malay, Malayalam, Maltese, Maori, Marathi, Moldavian, Moldovan, Mongolian, Nepali, Norwegian, Nynorsk, Occitan, Pashto, Persian, Polish, Portuguese, Punjabi, Pushto, Romanian, Russian, Sanskrit, Serbian, Shona, Sindhi, Sinhala, Slovak, Slovenian, Somali, Spanish, Sundanese, Swahili, Swedish, Tagalog, Tajik, Tamil, Tatar, Telugu, Thai, Tibetan, Turkish, Turkmen, Ukrainian, Urdu, Uzbek, Valencian, Vietnamese, Welsh, Yiddish, Yoruba.
 # --- Pair building & filtering ---
 MERGE_GAP = 3.0 # (seconds) Merge Target’s replies if the silence between them is shorter than this.
+MAX_CONTEXT = 10 # (utterances) Maximum number of preceding utterances to include as context.
 MIN_WORDS = 5 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
 MIN_CONF = 0.5 # (0.0–1.0 or None) Drop replies with avg confidence below this. Set None to disable.
 OVERLAP_FRAC = 0.80 # (fraction) If more than this % of a word overlaps with another speaker, drop it.
@@ -55,11 +56,11 @@ IDENTIFY_THRESHOLD = 0.70 # (0.0–1.0) How strict to be when matching Target’
 CONTEXTUAL_REID_THRESHOLD = 0.72 # (0.0-1.0) Similarity threshold for re-assigning short words.
 
 # --- Quality scoring weights ---
-WEIGHT_AVG_CONF = 0.5
+WEIGHT_AVG_CONF = 0.2
 WEIGHT_OVERLAP = 1.0
-WEIGHT_RATIO = 1.0
+WEIGHT_RATIO = 0.5
 WEIGHT_SIMILARITY = 1.0
-WEIGHT_PUNC = 0.5
+WEIGHT_PUNC = 0.2
 WEIGHT_DIVERSITY = 0.5
 WEIGHT_INPUT_LEN = 0.1
 WEIGHT_OUTPUT_LEN = 0.1
@@ -604,10 +605,10 @@ def attach_speakers_to_transcript(diarization, aligned_result, diarization_json_
                     best_overlap = overlap
                     best_label = label
             if best_label and best_overlap > 0.0:
-                word["speaker"] = best_label
+                word['speaker'] = best_label
                 attached += 1
             else:
-                word["speaker"] = "unknown"
+                word['speaker'] = "unknown"
 
     # Logging summary
     counts = {}
@@ -828,10 +829,10 @@ def reassign_short_target_words(words, target_label, window=REASSIGN_WINDOW, aud
                     )
                     # accept if similarity agrees (or if sim is very high)
                     if accept or sim > 0.82:
-                        w["speaker"] = target_label
+                        w['speaker'] = target_label
                 else:
                     # fallback: majority vote
-                    w["speaker"] = target_label
+                    w['speaker'] = target_label
         corrected.append(w)
     return corrected
 
@@ -1075,6 +1076,11 @@ def build_pairs_detailed(assigned_data, target_speaker):
                             current_text = [word['text']]
                     if current_text:
                         structured_context.append(f"{current_speaker}: \"{ ' '.join(current_text) }\"")
+                    
+                    # Enforce MAX_CONTEXT on the number of utterances
+                    if 'MAX_CONTEXT' in globals() and isinstance(MAX_CONTEXT, int) and len(structured_context) > MAX_CONTEXT:
+                        structured_context = structured_context[-MAX_CONTEXT:]
+
                     context_text = " ".join(structured_context)
                 else:
                     context_text = ""
@@ -1104,7 +1110,8 @@ def build_pairs_detailed(assigned_data, target_speaker):
                     "avg_score": avg_score,
                     "tstart": tstart,
                     "tend": tend,
-                    "words": reply_words
+                    "words": reply_words,
+                    "num_context_turns": len(structured_context)
                 }
 
                 # If this is the first pair and it has no preceding context, flag it as the introduction.
@@ -1438,13 +1445,13 @@ def score_pair_quality(pair, model, weights=None, punc_bonus=0.1, ratio_floor=0.
         score = 0.0
     else:
         score = (
-            avg_conf * WEIGHT_AVG_CONF +
-            overlap_score * WEIGHT_OVERLAP +
-            ratio_score * WEIGHT_RATIO +
-            semantic_similarity * WEIGHT_SIMILARITY +
-            punc_score * WEIGHT_PUNC +
-            diversity_score * WEIGHT_DIVERSITY +
-            input_len_score * WEIGHT_INPUT_LEN +
+            avg_conf * WEIGHT_AVG_CONF + 
+            overlap_score * WEIGHT_OVERLAP + 
+            ratio_score * WEIGHT_RATIO + 
+            semantic_similarity * WEIGHT_SIMILARITY + 
+            punc_score * WEIGHT_PUNC + 
+            diversity_score * WEIGHT_DIVERSITY + 
+            input_len_score * WEIGHT_INPUT_LEN + 
             output_len_score * WEIGHT_OUTPUT_LEN
         ) / total_weight
 
@@ -1689,6 +1696,26 @@ def cleanup_redundant_files(base_name):
             except OSError as e:
                 log.warning(f"[CLEANUP]   - Failed to delete {os.path.basename(f_path)}: {e}")
 
+def get_sentence_count(text):
+    """Counts the number of sentences in a given text."""
+    if not text or not isinstance(text, str):
+        return 0
+    try:
+        return len(sent_tokenize(text))
+    except Exception:
+        # Fallback for any NLTK errors
+        return text.count('.') + text.count('?') + text.count('!')
+
+def get_ttr(text):
+    """Calculates the Type-Token Ratio (lexical diversity) of a text."""
+    if not text or not isinstance(text, str):
+        return 0.0
+    tokens = re.findall(r'\w+', text.lower())
+    if not tokens:
+        return 0.0
+    unique_tokens = set(tokens)
+    return len(unique_tokens) / len(tokens)
+
 # ==================================================================
 # 🚀 Main execution block
 # ==================================================================
@@ -1897,12 +1924,14 @@ def run_pipeline(input_audio_path, models):
                 total_word_count += 1
 
     is_single_speaker_scenario = False
+    target_speaker_word_ratio = 0.0
     if best_speaker and total_word_count > 0:
         target_speaker_words = speaker_word_counts.get(best_speaker, 0)
+        target_speaker_word_ratio = target_speaker_words / total_word_count
         # If only one speaker was diarized OR the target speaks > 98% of the words
-        if len(speaker_word_counts) == 1 or (target_speaker_words / total_word_count) > 0.98:
+        if len(speaker_word_counts) == 1 or target_speaker_word_ratio > 0.98:
             is_single_speaker_scenario = True
-            log.info(f"[PIPELINE] Single-speaker Q&A scenario detected for {base_name}.")
+            log.info(f"[PIPELINE] Single-speaker Q&A scenario detected for {base_name} (target speaker word ratio: {target_speaker_word_ratio:.2f}).")
 
     # --- Scenario-based Pair Building ---
     if is_single_speaker_scenario:
@@ -1924,6 +1953,17 @@ def run_pipeline(input_audio_path, models):
                 # Q&A pairs should not have empty inputs, but handle defensively
                 if not p.get("input", "").strip():
                     p["input"] = "[MISSING QUESTION]"
+                
+                # Add contextual metadata
+                p["source_filename"] = base_name
+                p["pair_format"] = "qna"
+                p["target_speaker_word_ratio"] = target_speaker_word_ratio
+                p["num_context_turns"] = 1 # Q&A format always has 1 turn of context
+                p["input_sentence_count"] = get_sentence_count(p.get("input", ""))
+                p["output_sentence_count"] = get_sentence_count(p.get("output", ""))
+                p["input_ttr"] = get_ttr(p.get("input", ""))
+                p["output_ttr"] = get_ttr(p.get("output", ""))
+                
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")
         
         cleanup_redundant_files(base_name)
@@ -2083,6 +2123,15 @@ def run_pipeline(input_audio_path, models):
     final_output_path = FINAL_OUTPUT
     with open(final_output_path, "w", encoding="utf-8") as f:
         for p in final_pairs:
+            # Add contextual metadata
+            p["source_filename"] = base_name
+            p["pair_format"] = "conversational"
+            p["target_speaker_word_ratio"] = target_speaker_word_ratio
+            p["input_sentence_count"] = get_sentence_count(p.get("input", ""))
+            p["output_sentence_count"] = get_sentence_count(p.get("output", ""))
+            p["input_ttr"] = get_ttr(p.get("input", ""))
+            p["output_ttr"] = get_ttr(p.get("output", ""))
+            
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
     flagged_count = len(flagged_ids)
@@ -2102,9 +2151,9 @@ def run_pipeline(input_audio_path, models):
     final_avg_conf = statistics.mean([p['avg_score'] for p in final_pairs if p.get('avg_score') is not None]) if final_pairs else 0.0
     post_filter_counts = post_summary.get('counts', {})
 
-    # ==========================
+    # ========================== 
     # FINAL PIPELINE SUMMARY
-    # ==========================
+    # ========================== 
     log.info("========================================")
     log.info(f"FINAL DATASET SUMMARY FOR: {base_name}")
     log.info("========================================")
@@ -2195,4 +2244,4 @@ def main():
     print_final_batch_summary(setup_time, per_file_times, total_time)
 
 if __name__ == "__main__":
-    main()in()
+    main()

@@ -10,7 +10,6 @@ import tempfile
 import re
 import csv
 import traceback
-import warnings
 from tqdm import tqdm
 import math
 

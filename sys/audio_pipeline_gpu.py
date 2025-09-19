@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import sys
+import subprocess
 import time
 import zipfile
 import tempfile
@@ -43,12 +44,12 @@ KEEP_DEBUG_OUTPUTS = True # True = keep merged/clean/overlap files, False = only
 LANGUAGE = "en"
 # WhisperX Supports the following for transcription: Afrikaans, Albanian, Amharic, Arabic, Armenian, Assamese, Azerbaijani, Bashkir, Basque, Belarusian, Bengali, Bosnian, Breton, Bulgarian, Burmese, Castilian, Catalan, Chinese, Croatian, Czech, Danish, Dutch, English, Estonian, Faroese, Finnish, Flemish, French, Galician, Georgian, German, Greek, Gujarati, Haitian Creole, Hausa, Hawaiian, Hebrew, Hindi, Hungarian, Icelandic, Indonesian, Italian, Japanese, Javanese, Kannada, Kazakh, Khmer, Korean, Lao, Latin, Latvian, Letzeburgesch, Lithuanian, Luxembourgish, Macedonian, Malagasy, Malay, Malayalam, Maltese, Maori, Marathi, Moldavian, Moldovan, Mongolian, Nepali, Norwegian, Nynorsk, Occitan, Pashto, Persian, Polish, Portuguese, Punjabi, Pushto, Romanian, Russian, Sanskrit, Serbian, Shona, Sindhi, Sinhala, Slovak, Slovenian, Somali, Spanish, Sundanese, Swahili, Swedish, Tagalog, Tajik, Tamil, Tatar, Telugu, Thai, Tibetan, Turkish, Turkmen, Ukrainian, Urdu, Uzbek, Valencian, Vietnamese, Welsh, Yiddish, Yoruba.
 # --- Pair building & filtering ---
-MERGE_GAP = 3.0 # (seconds) Merge Target’s replies if the silence between them is shorter than this.
+MERGE_GAP = 1.5 # (seconds) Merge Target’s replies if the silence between them is shorter than this.
 MAX_CONTEXT = 10 # (utterances) Maximum number of preceding utterances to include as context.
-MIN_WORDS = 5 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
+MIN_WORDS = 7 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
 MIN_CONF = 0.5 # (0.0–1.0 or None) Drop replies with avg confidence below this. Set None to disable.
 OVERLAP_FRAC = 0.80 # (fraction) If more than this % of a word overlaps with another speaker, drop it.
-MIN_QUALITY_SCORE = 0.55 # (0.0-1.0) Minimum quality score to keep a pair.
+MIN_QUALITY_SCORE = 0.57 # (0.0-1.0) Minimum quality score to keep a pair.
 
 # --- Speaker identification ---
 IDENTIFY_THRESHOLD = 0.70 # (0.0–1.0) How strict to be when matching Target’s voice to a diarized speaker.
@@ -1577,57 +1578,59 @@ def identify_speaker(samples_folder, averaged_speaker_embeddings, threshold=IDEN
     log.info(f"[IDENTIFY] Selected target speaker {best_speaker} (similarity={best_similarity:.4f})")
     return best_speaker, float(best_similarity)
 
-def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_size=WHISPER_BATCH_SIZE,
-                        condition_on_previous_text=False):
+def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_size=WHISPER_BATCH_SIZE,                        condition_on_previous_text=False):
     """
-    Split the audio into non-silent chunks using the pipeline's neural VAD, 
-    transcribe each chunk, then stitch the segments back together into a 
-    single Whisper-style result dict with adjusted segment timestamps.
+    Split the audio into non-silent chunks using neural VAD, transcribe each chunk with WhisperX,
+    and stitch the results. This version uses FFmpeg to extract chunks, avoiding loading large
+    files into memory.
     """
     log.info("[TRANSCRIBE-VAD] Using neural VAD for audio segmentation...")
 
-    # Use the pipeline's superior neural VAD with fallback to get speech segments
-    # This is more robust than the previous energy-based pydub method.
     if not os.path.exists(wav_path):
-        log.error(f"[TRANSCRIBE-VAD] WAV file not found at {wav_path}. Cannot perform VAD. Please ensure it's created before this step.")
-        # Fallback to full-file transcription if WAV is missing
+        log.error(f"[TRANSCRIBE-VAD] WAV file not found at {wav_path}. Cannot perform VAD.")
         return model.transcribe(audio_path, batch_size=batch_size, language=language)
-        
+
     nonsilent_intervals = run_vad_with_fallback(wav_path, vad_mult=CFG.get("VAD_MULT", 0.3))
     
-    # Convert segments from seconds to milliseconds for pydub
-    nonsilent_intervals_ms = [(int(start * 1000), int(end * 1000)) for start, end in nonsilent_intervals]
-
-    audio = AudioSegment.from_file(audio_path)
-
-    # If VAD found nothing, fall back to full-file transcription.
-    if not nonsilent_intervals_ms:
+    if not nonsilent_intervals:
         log.warning("[TRANSCRIBE-VAD] VAD returned no voiced intervals — falling back to full-file transcription.")
         return model.transcribe(audio_path, batch_size=batch_size, language=language)
 
-    merged_result = {"language": None, "segments": []} # Initialize merged_result
+    merged_result = {"language": None, "segments": []}
     
     with tempfile.TemporaryDirectory() as td:
-        for i, (start_ms, end_ms) in enumerate(tqdm(nonsilent_intervals_ms, desc="Transcribing segments", leave=False)):
-            # Export segment
-            seg = audio[start_ms:end_ms]
+        for i, (start_sec, end_sec) in enumerate(tqdm(nonsilent_intervals, desc="Transcribing segments", leave=False)):
             tmp_path = os.path.join(td, f"vad_seg_{i}.wav")
-            seg.export(tmp_path, format="wav")
+            duration_sec = end_sec - start_sec
 
-            # Transcribe this segment
+            command = [
+                ffmpeg_exe,
+                '-ss', str(start_sec),
+                '-t', str(duration_sec),
+                '-i', wav_path,  # Use the consistent 16kHz WAV file
+                '-y',
+                '-ar', '16000',
+                '-ac', '1',
+                tmp_path
+            ]
+            
             try:
-                # remove unsupported kwargs when calling model.transcribe
-                res = model.transcribe(tmp_path, batch_size=batch_size, language=language)
-            except Exception as e:
-                log.warning(f"[TRANSCRIBE-VAD] Transcription failed for segment {i} [{start_ms}..{end_ms}]: {e}")
+                # Using subprocess.run to execute ffmpeg command
+                subprocess.run(command, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                log.warning(f"[TRANSCRIBE-VAD] ffmpeg failed for segment {i}: {e.stderr}")
                 continue
 
-            # set language if not set
+            try:
+                res = model.transcribe(tmp_path, batch_size=batch_size, language=language)
+            except Exception as e:
+                log.warning(f"[TRANSCRIBE-VAD] Transcription failed for segment {i} [{start_sec:.2f}..{end_sec:.2f}]: {e}")
+                continue
+
             if merged_result["language"] is None:
                 merged_result["language"] = res.get("language")
 
-            # adjust timings of each returned segment by start_ms/1000
-            offset = start_ms / 1000.0
+            offset = start_sec
             for seg_item in res.get("segments", []):
                 seg_adj = seg_item.copy()
                 seg_adj["start"] = (seg_item.get("start", 0.0) or 0.0) + offset
@@ -1638,12 +1641,12 @@ def transcribe_with_vad(model, audio_path, wav_path, language=LANGUAGE, batch_si
         log.warning("[LANG] Transcript missing language — forcing 'en'")
         merged_result["language"] = "en"
 
-    # sort segments by start time to be safe
     merged_result["segments"] = sorted(merged_result["segments"], key=lambda s: s.get("start", 0.0))
     log.info("[TRANSCRIBE-VAD] Transcribed %d voiced intervals into %d segments.",
-                 len(nonsilent_intervals_ms), len(merged_result["segments"]))
+                 len(nonsilent_intervals), len(merged_result["segments"]))
 
     return merged_result
+
 
 def contextual_reid_with_embeddings(audio_segment, word_start, word_end, target_emb, encoder=None, pad=0.05, similarity_threshold=CONTEXTUAL_REID_THRESHOLD):
     """

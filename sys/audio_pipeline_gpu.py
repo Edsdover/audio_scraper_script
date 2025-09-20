@@ -49,19 +49,19 @@ MAX_CONTEXT = 10 # (utterances) Maximum number of preceding utterances to includ
 MIN_WORDS = 7 # (words) Minimum length of Target’s reply to keep it. Shorter replies are dropped.
 MIN_CONF = 0.5 # (0.0–1.0 or None) Drop replies with avg confidence below this. Set None to disable.
 OVERLAP_FRAC = 0.80 # (fraction) If more than this % of a word overlaps with another speaker, drop it.
-MIN_QUALITY_SCORE = 0.57 # (0.0-1.0) Minimum quality score to keep a pair.
+MIN_QUALITY_SCORE = 0.60 # (0.0-1.0) Minimum quality score to keep a pair.
 
 # --- Speaker identification ---
 IDENTIFY_THRESHOLD = 0.70 # (0.0–1.0) How strict to be when matching Target’s voice to a diarized speaker.
-CONTEXTUAL_REID_THRESHOLD = 0.72 # (0.0-1.0) Similarity threshold for re-assigning short words.
+CONTEXTUAL_REID_THRESHOLD = 0.60 # (0.0-1.0) Similarity threshold for re-assigning short words.
 
 # --- Quality scoring weights ---
 WEIGHT_AVG_CONF = 0.2
 WEIGHT_OVERLAP = 1.0
-WEIGHT_RATIO = 0.5
+WEIGHT_RATIO = 1.0
 WEIGHT_SIMILARITY = 1.0
 WEIGHT_PUNC = 0.2
-WEIGHT_DIVERSITY = 0.5
+WEIGHT_DIVERSITY = 0.1
 WEIGHT_INPUT_LEN = 0.1
 WEIGHT_OUTPUT_LEN = 0.1
 

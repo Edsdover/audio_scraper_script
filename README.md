@@ -142,6 +142,60 @@ This project uses a clean folder structure to separate inputs, outputs, and syst
 
 ---
 
+## 🧠 Cache Invalidation Guide
+
+To ensure your results always reflect your latest settings, it's critical to clear the cache when you change certain parameters. This guide explains which files to delete. When in doubt, deleting the entire `cache/` folder for the audio file you are processing is the safest way to force a complete re-run.
+
+**Cache File Suffixes:**
+
+*   `.wav`: The standardized audio file.
+*   `.transcript.json`: Raw output from WhisperX transcription.
+*   `.aligned.json`: Word-level timestamps from alignment.
+*   `.diarization.json`: Speaker turn identification.
+*   `.assigned.json`: Words with speakers assigned.
+*   `_pairs_...jsonl`, `_pair_...csv`, etc.: Files related to pair building, scoring, and filtering.
+
+---
+
+### 1. Full Re-run Required
+
+If you change **any** of the following parameters, you **must delete the entire `cache/` folder** for the audio file you are processing. These settings fundamentally alter the earliest, most computationally expensive stages of the pipeline.
+
+*   **Audio Source Files:**
+    *   Modifying the source audio in `audio_files/`.
+*   **Transcription (`.transcript.json`):**
+    *   `WHISPER_MODEL`
+    *   `WHISPER_BATCH_SIZE`
+    *   `USE_VAD`
+    *   `LANGUAGE`
+    *   Any values within the `PROFILES` dictionary (e.g., `VAD_MULT`).
+*   **Diarization (`.diarization.json`):**
+    *   Any changes to the `pyannote.audio` models or your `HF_TOKEN`.
+
+---
+
+### 2. Partial Re-run (Pair Building & Scoring)
+
+If you **only** change the parameters below, you can keep the foundational cache files (`.wav`, `.transcript.json`, `.aligned.json`, `.diarization.json`, and `.assigned.json`).
+
+*   **Delete:** All files in the `cache/` folder that start with your audio file's name and end with `_pairs_...` or `_pair_...` (e.g., `*_pairs_with_overlap_meta.jsonl`, `*_pair_quality_metrics.csv`, etc.).
+*   **Applicable Parameters:**
+    *   **Speaker Identification:**
+        *   `IDENTIFY_THRESHOLD`
+        *   `CONTEXTUAL_REID_THRESHOLD`
+        *   Changing the sample files in `samples/`.
+    *   **Pair Building & Filtering:**
+        *   `MERGE_GAP`
+        *   `MAX_CONTEXT`
+        *   `MIN_WORDS`
+        *   `MIN_CONF`
+        *   `OVERLAP_FRAC`
+    *   **Quality Scoring & Final Selection:**
+        *   `MIN_QUALITY_SCORE`
+        *   All `WEIGHT_*` parameters.
+
+---
+
 ## 📊 Output Schema
 
 The final `_results.jsonl` files contain a rich set of data for each training pair. This allows for powerful, nuanced filtering in downstream processing steps.
@@ -167,4 +221,3 @@ The final `_results.jsonl` files contain a rich set of data for each training pa
 | `avg_score` | Float | The average word-level transcription confidence from WhisperX for the `output`. |
 | `tstart` / `tend` | Float | The start and end time (in seconds) of the `output` utterance in the audio. |
 | `words` | Array | A detailed list of word objects for the `output`, including timestamps and confidence. |
-
